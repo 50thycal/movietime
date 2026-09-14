@@ -4,53 +4,229 @@ import { useState } from "react";
 import { send, useSearch } from "@/lib/api";
 import { fmtRuntime } from "@/lib/format";
 import type { NightDetail, TmdbSearchResult } from "@/lib/types";
-import { ErrorNote, Poster, ScorePicker, Sheet, Spinner } from "./ui";
+import { rotationOrder } from "@/lib/rotation";
+import { MAX_CANDIDATES } from "@/lib/constants";
+import { useApp } from "./Shell";
+import { Avatar, ErrorNote, Poster, ScorePicker, Sheet, Spinner } from "./ui";
 
-/** Search TMDB and submit a pick. */
+/** Search TMDB and submit one pick, or a shortlist of up to three for a vote. */
 export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose: () => void; onPicked?: (n: NightDetail) => void }) {
   const [q, setQ] = useState("");
-  const [busy, setBusy] = useState<number | null>(null);
+  const [shortlist, setShortlist] = useState<TmdbSearchResult[]>([]);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const { data, isLoading, error: searchError } = useSearch(q);
 
-  async function propose(m: TmdbSearchResult) {
-    setBusy(m.tmdb_id);
+  const inList = (m: TmdbSearchResult) => shortlist.some((x) => x.tmdb_id === m.tmdb_id);
+  function toggle(m: TmdbSearchResult) {
+    setError(null);
+    if (inList(m)) return setShortlist(shortlist.filter((x) => x.tmdb_id !== m.tmdb_id));
+    if (shortlist.length >= MAX_CANDIDATES) return setError(new Error(`Three is the limit. Remove one first.`));
+    setShortlist([...shortlist, m]);
+  }
+
+  async function propose(list: TmdbSearchResult[]) {
+    setBusy(true);
     setError(null);
     try {
-      const night = await send<NightDetail>("POST", "/api/nights", { tmdb_id: m.tmdb_id });
+      const night = await send<NightDetail>("POST", "/api/nights", { tmdb_ids: list.map((m) => m.tmdb_id) });
       onPicked?.(night);
       onClose();
       setQ("");
+      setShortlist([]);
     } catch (e) {
       setError(e);
     } finally {
-      setBusy(null);
+      setBusy(false);
     }
   }
 
   return (
     <Sheet open={open} onClose={onClose} title="Pick a movie">
+      <p className="mb-2 text-xs text-muted">Tap a result to propose it, or use + to build a shortlist of up to three and let everyone vote.</p>
       <input className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
+      {shortlist.length > 0 && (
+        <div className="card mb-3 flex flex-col gap-2 p-3">
+          <div className="label">Shortlist · {shortlist.length}/{MAX_CANDIDATES}</div>
+          <div className="flex gap-2">
+            {shortlist.map((m) => (
+              <button key={m.tmdb_id} className="relative w-16" onClick={() => toggle(m)} aria-label={`Remove ${m.title}`}>
+                <Poster path={m.poster_path} title={m.title} size="w185" />
+                <span className="absolute -right-1 -top-1 rounded-full bg-bad px-1.5 text-xs font-black text-white">✕</span>
+              </button>
+            ))}
+          </div>
+          <button className="btn btn-gold w-full" disabled={busy} onClick={() => propose(shortlist)}>
+            {shortlist.length === 1 ? "Propose this one" : `🗳 Put ${shortlist.length} up for a vote`}
+          </button>
+        </div>
+      )}
       <ErrorNote error={error ?? searchError} />
       {isLoading && !data && <Spinner />}
       <div className="flex flex-col gap-2">
         {data?.map((m) => (
-          <button key={m.tmdb_id} className="card flex gap-3 p-2 text-left active:scale-[0.99]" disabled={busy != null} onClick={() => propose(m)}>
-            <Poster path={m.poster_path} title={m.title} className="w-16 shrink-0" size="w185" />
-            <div className="min-w-0 flex-1">
-              <div className="font-black leading-tight">
-                {m.title} {m.year && <span className="font-bold text-muted">({m.year})</span>}
+          <div key={m.tmdb_id} className={`card flex gap-3 p-2 ${inList(m) ? "border-gold" : ""}`}>
+            <button className="flex min-w-0 flex-1 gap-3 text-left active:scale-[0.99]" disabled={busy} onClick={() => (shortlist.length ? toggle(m) : propose([m]))}>
+              <Poster path={m.poster_path} title={m.title} className="w-16 shrink-0" size="w185" />
+              <div className="min-w-0 flex-1">
+                <div className="font-black leading-tight">
+                  {m.title} {m.year && <span className="font-bold text-muted">({m.year})</span>}
+                </div>
+                <div className="mt-1 text-xs font-bold text-gold">⏱ {fmtRuntime(m.runtime_min)}</div>
+                <div className="text-xs text-muted">{m.genres.map((g) => g.name).join(" · ")}</div>
+                {m.director && <div className="text-xs text-muted">Dir. {m.director}</div>}
+                <div className="mt-1 line-clamp-2 text-xs text-muted">{m.overview}</div>
               </div>
-              <div className="mt-1 text-xs font-bold text-gold">⏱ {fmtRuntime(m.runtime_min)}</div>
-              <div className="text-xs text-muted">{m.genres.map((g) => g.name).join(" · ")}</div>
-              {m.director && <div className="text-xs text-muted">Dir. {m.director}</div>}
-              <div className="mt-1 line-clamp-2 text-xs text-muted">{m.overview}</div>
-            </div>
-            {busy === m.tmdb_id && <Spinner />}
-          </button>
+            </button>
+            <button className={`chip self-center text-lg ${inList(m) ? "chip-on" : ""}`} onClick={() => toggle(m)} aria-label={inList(m) ? "Remove from shortlist" : "Add to shortlist"}>
+              {inList(m) ? "✓" : "+"}
+            </button>
+          </div>
         ))}
         {data && data.length === 0 && <div className="py-6 text-center text-sm text-muted">Nothing found.</div>}
       </div>
+    </Sheet>
+  );
+}
+
+/** Tonight → tap the Up Next card: set whose turn it really is. */
+export function ChangePickerSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { state, members } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const order = rotationOrder(members);
+  async function pick(id: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await send("POST", "/api/rotation", { member_id: id });
+      onClose();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Sheet open={open} onClose={onClose} title="Whose turn is it?">
+      <p className="mb-3 text-sm text-muted">Everyone sees this change immediately. The rotation carries on from whoever you choose.</p>
+      <div className="grid grid-cols-2 gap-2">
+        {order.map((m) => (
+          <button key={m.id} className={`btn ${state?.rotation.current?.id === m.id ? "btn-gold" : "btn-ghost"} justify-start gap-2`} disabled={busy} onClick={() => pick(m.id)}>
+            <Avatar member={m} size={24} /> {m.name}
+          </button>
+        ))}
+      </div>
+      <ErrorNote error={error} />
+    </Sheet>
+  );
+}
+
+/** History → add a movie the group watched before the app existed. */
+export function BackfillSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { members, meId } = useApp();
+  const [q, setQ] = useState("");
+  const [movie, setMovie] = useState<TmdbSearchResult | null>(null);
+  const [selector, setSelector] = useState<string | null>(null);
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [scores, setScores] = useState<Record<string, number | null>>({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const { data, isLoading } = useSearch(q);
+  const active = members.filter((m) => m.active);
+
+  async function submit() {
+    if (!movie || !selector) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await send("POST", "/api/history/backfill", {
+        tmdb_id: movie.tmdb_id,
+        selector_id: selector,
+        watched_at: new Date(date + "T20:00:00").toISOString(),
+        ratings: Object.entries(scores)
+          .filter(([, v]) => v != null)
+          .map(([member_id, score]) => ({ member_id, score })),
+      });
+      onClose();
+      setMovie(null);
+      setQ("");
+      setScores({});
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet open={open} onClose={onClose} title="Add a past movie">
+      {!movie ? (
+        <>
+          <input className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
+          {isLoading && !data && <Spinner />}
+          <div className="flex flex-col gap-2">
+            {data?.map((m) => (
+              <button key={m.tmdb_id} className="card flex gap-3 p-2 text-left" onClick={() => setMovie(m)}>
+                <Poster path={m.poster_path} title={m.title} className="w-12 shrink-0" size="w185" />
+                <div className="min-w-0">
+                  <div className="font-black leading-tight">
+                    {m.title} {m.year && <span className="font-bold text-muted">({m.year})</span>}
+                  </div>
+                  <div className="text-xs text-muted">{fmtRuntime(m.runtime_min)} · {m.genres.map((g) => g.name).join(", ")}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="flex flex-col gap-4">
+          <button className="card flex items-center gap-3 p-2 text-left" onClick={() => setMovie(null)}>
+            <Poster path={movie.poster_path} title={movie.title} className="w-12 shrink-0" size="w185" />
+            <div className="min-w-0 flex-1 font-black">
+              {movie.title} {movie.year && <span className="font-bold text-muted">({movie.year})</span>}
+            </div>
+            <span className="chip">change</span>
+          </button>
+          <div>
+            <div className="label mb-1">Who picked it?</div>
+            <div className="grid grid-cols-2 gap-2">
+              {active.map((m) => (
+                <button key={m.id} className={`btn ${selector === m.id ? "btn-gold" : "btn-ghost"} min-h-11 justify-start gap-2 text-sm`} onClick={() => setSelector(m.id)}>
+                  <Avatar member={m} size={22} /> {m.name}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="label mb-1">When did you watch it?</div>
+            <input type="date" className="input" value={date} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setDate(e.target.value)} />
+          </div>
+          <div>
+            <div className="label mb-1">Ratings (optional — everyone can add their own later)</div>
+            <div className="flex flex-col gap-2">
+              {active.map((m) => (
+                <div key={m.id} className="flex items-center gap-2">
+                  <Avatar member={m} size={24} />
+                  <span className="w-16 truncate text-sm font-bold">{m.name}</span>
+                  <select className="input min-h-10 flex-1" value={scores[m.id] ?? ""} onChange={(e) => setScores({ ...scores, [m.id]: e.target.value === "" ? null : Number(e.target.value) })}>
+                    <option value="">{m.id === meId ? "— your score —" : "— skip —"}</option>
+                    {Array.from({ length: 19 }, (_, i) => 1 + i * 0.5).map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ))}
+            </div>
+          </div>
+          <ErrorNote error={error} />
+          <button className="btn btn-gold w-full" disabled={!selector || busy} onClick={submit}>
+            Add to history
+          </button>
+        </div>
+      )}
     </Sheet>
   );
 }

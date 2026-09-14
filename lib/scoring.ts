@@ -74,3 +74,26 @@ export function approvalOutcome(
   const approved = new Set(approvals.filter((a) => a.decision === "approve").map((a) => a.member_id));
   return required.every((id) => approved.has(id)) ? "approved" : "pending";
 }
+
+/**
+ * Shortlist vote: once every active member has voted, the film with the most
+ * votes wins. Ties go to whichever tied film the picker voted for, then to
+ * shortlist order. Returns null while votes are still outstanding.
+ */
+export function voteOutcome(
+  votes: { member_id: string; movie_id: string }[],
+  candidateIds: string[],
+  selectorId: string,
+  activeMemberIds: string[],
+): string | null {
+  const voted = new Set(votes.map((v) => v.member_id));
+  if (activeMemberIds.length === 0 || !activeMemberIds.every((id) => voted.has(id))) return null;
+  const counts = new Map(candidateIds.map((id) => [id, 0]));
+  for (const v of votes) if (counts.has(v.movie_id)) counts.set(v.movie_id, counts.get(v.movie_id)! + 1);
+  const max = Math.max(...counts.values());
+  const tied = candidateIds.filter((id) => counts.get(id) === max);
+  if (tied.length === 1) return tied[0];
+  const pickers = votes.find((v) => v.member_id === selectorId)?.movie_id;
+  if (pickers && tied.includes(pickers)) return pickers;
+  return tied[0];
+}

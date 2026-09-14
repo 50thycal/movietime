@@ -6,7 +6,7 @@
 import type { Sql } from "./db";
 import { Conflict, NotFound, BadRequest } from "./http";
 import { nextAfter, rotationInfo } from "./rotation";
-import { approvalOutcome, ratingsRevealed } from "./scoring";
+import { approvalOutcome, ratingsRevealed, voteOutcome } from "./scoring";
 import { nightAwards, type Award, type Dataset, type NightData } from "./stats";
 import type {
   Approval,
@@ -20,6 +20,7 @@ import type {
   Rating,
   Review,
   SnackItem,
+  Vote,
   SnackRating,
   TmdbSearchResult,
 } from "./types";
@@ -115,7 +116,7 @@ export async function requireNight(sql: Sql, nightId: string): Promise<MovieNigh
 
 export async function loadNightDetail(sql: Sql, nightId: string, me: string | null): Promise<NightDetail> {
   const night = await requireNight(sql, nightId);
-  const [movies, selectors, approvals, ratings, reviews, snacks, snackRatings, predictions, members] = await Promise.all([
+  const [movies, selectors, approvals, ratings, reviews, snacks, snackRatings, predictions, members, candidates, votes] = await Promise.all([
     sql`SELECT * FROM movies WHERE id = ${night.movie_id}`,
     sql`SELECT * FROM members WHERE id = ${night.selector_id}`,
     sql`SELECT * FROM movie_approvals WHERE night_id = ${nightId} ORDER BY created_at`,
@@ -125,6 +126,8 @@ export async function loadNightDetail(sql: Sql, nightId: string, me: string | nu
     sql`SELECT sr.* FROM snack_ratings sr JOIN snack_items si ON si.id = sr.snack_item_id WHERE si.night_id = ${nightId}`,
     sql`SELECT * FROM predictions WHERE night_id = ${nightId} ORDER BY created_at`,
     loadMembers(sql),
+    sql`SELECT m.* FROM night_candidates c JOIN movies m ON m.id = c.movie_id WHERE c.night_id = ${nightId} ORDER BY c.position`,
+    sql`SELECT * FROM night_votes WHERE night_id = ${nightId} ORDER BY created_at`,
   ]);
   const allRatings = ratings as Rating[];
   const revealed = night.status === "complete" || ratingsRevealed(allRatings.map((r) => r.member_id), members.filter((m) => m.active).map((m) => m.id));
@@ -139,6 +142,8 @@ export async function loadNightDetail(sql: Sql, nightId: string, me: string | nu
     awards,
     night,
     movie: movies[0] as Movie,
+    candidates: candidates.length ? (candidates as Movie[]) : [movies[0] as Movie],
+    votes: votes as Vote[],
     selector: selectors[0] as Member,
     approvals: approvals as Approval[],
     ratings: revealed ? allRatings : [],
@@ -174,14 +179,82 @@ export async function loadHomeState(sql: Sql, me: string | null): Promise<HomeSt
 
 // ---------------------------------------------------------------- lifecycle
 
-export async function proposeMovie(sql: Sql, memberId: string, movie: TmdbSearchResult): Promise<NightDetail> {
+import { MAX_CANDIDATES } from "./constants";
+export { MAX_CANDIDATES };
+
+/**
+ * Propose one film (group approves/rejects) or a shortlist of up to three
+ * (everyone votes, winner becomes the movie).
+ */
+export async function proposeMovies(sql: Sql, memberId: string, movies: TmdbSearchResult[]): Promise<NightDetail> {
   const member = await requireMember(sql, memberId);
   const current = await currentSelectorId(sql);
   if (current && current !== member.id) throw new Conflict("It isn't your turn to pick");
   if (await activeNight(sql)) throw new Conflict("There's already a movie in play");
-  const row = await upsertMovie(sql, movie);
+  const unique = movies.filter((m, i) => movies.findIndex((x) => x.tmdb_id === m.tmdb_id) === i);
+  if (unique.length < 1) throw new BadRequest("Pick at least one movie");
+  if (unique.length > MAX_CANDIDATES) throw new BadRequest(`At most ${MAX_CANDIDATES} movies`);
+  const rows_: Movie[] = [];
+  for (const m of unique) rows_.push(await upsertMovie(sql, m));
   // The partial unique index is the real guard against two simultaneous proposals.
-  const rows = (await sql`INSERT INTO movie_nights (movie_id, selector_id, status) VALUES (${row.id}, ${member.id}, 'proposed') RETURNING *`) as MovieNight[];
+  const rows = (await sql`INSERT INTO movie_nights (movie_id, selector_id, status) VALUES (${rows_[0].id}, ${member.id}, 'proposed') RETURNING *`) as MovieNight[];
+  for (let i = 0; i < rows_.length; i++) {
+    await sql`INSERT INTO night_candidates (night_id, movie_id, position) VALUES (${rows[0].id}, ${rows_[i].id}, ${i})`;
+  }
+  return loadNightDetail(sql, rows[0].id, memberId);
+}
+
+export async function proposeMovie(sql: Sql, memberId: string, movie: TmdbSearchResult): Promise<NightDetail> {
+  return proposeMovies(sql, memberId, [movie]);
+}
+
+/** Vote for one of the shortlisted films. When everyone has voted, the winner is set. */
+export async function castVote(sql: Sql, nightId: string, memberId: string, movieId: string): Promise<NightDetail> {
+  const night = await requireNight(sql, nightId);
+  await requireMember(sql, memberId);
+  if (night.status !== "proposed") throw new Conflict("Voting is closed");
+  const candidates = await sql`SELECT movie_id FROM night_candidates WHERE night_id = ${nightId} ORDER BY position`;
+  if (candidates.length < 2) throw new Conflict("This proposal isn't a vote");
+  if (!candidates.some((c) => c.movie_id === movieId)) throw new BadRequest("That movie isn't on the shortlist");
+  await sql`INSERT INTO night_votes (night_id, member_id, movie_id) VALUES (${nightId}, ${memberId}, ${movieId})
+            ON CONFLICT (night_id, member_id) DO UPDATE SET movie_id = EXCLUDED.movie_id, created_at = now()`;
+  const members = await loadMembers(sql);
+  const votes = (await sql`SELECT * FROM night_votes WHERE night_id = ${nightId}`) as Vote[];
+  const winner = voteOutcome(
+    votes,
+    candidates.map((c) => c.movie_id as string),
+    night.selector_id,
+    members.filter((m) => m.active).map((m) => m.id),
+  );
+  if (winner) {
+    await sql`UPDATE movie_nights SET movie_id = ${winner}, status = 'approved', approved_at = now() WHERE id = ${nightId} AND status = 'proposed'`;
+  }
+  return loadNightDetail(sql, nightId, memberId);
+}
+
+/**
+ * Record a movie the group watched before MovieTime existed. Lands straight in
+ * history, never touches the rotation, and any ratings given are optional —
+ * members can add their own later from the movie page.
+ */
+export async function backfillNight(
+  sql: Sql,
+  memberId: string,
+  movie: TmdbSearchResult,
+  selectorId: string,
+  watchedAt: Date,
+  ratings: { member_id: string; score: number }[],
+): Promise<NightDetail> {
+  await requireMember(sql, memberId);
+  const selector = await requireMember(sql, selectorId);
+  const row = await upsertMovie(sql, movie);
+  const ts = watchedAt.toISOString();
+  const rows = (await sql`INSERT INTO movie_nights (movie_id, selector_id, status, proposed_at, approved_at, started_at, watched_at, completed_at, rotation_advanced)
+    VALUES (${row.id}, ${selector.id}, 'complete', ${ts}, ${ts}, ${ts}, ${ts}, ${ts}, true) RETURNING *`) as MovieNight[];
+  await sql`INSERT INTO night_candidates (night_id, movie_id, position) VALUES (${rows[0].id}, ${row.id}, 0)`;
+  for (const r of ratings) {
+    await sql`INSERT INTO ratings (night_id, member_id, score) VALUES (${rows[0].id}, ${r.member_id}, ${r.score}) ON CONFLICT (night_id, member_id) DO NOTHING`;
+  }
   return loadNightDetail(sql, rows[0].id, memberId);
 }
 
@@ -203,6 +276,8 @@ export async function decideApproval(
   await requireMember(sql, memberId);
   if (night.status !== "proposed") throw new Conflict("This movie isn't waiting on approval");
   if (night.selector_id === memberId) throw new Conflict("You can't vote on your own pick");
+  const candidateCount = await sql`SELECT count(*)::int AS n FROM night_candidates WHERE night_id = ${nightId}`;
+  if (Number(candidateCount[0]?.n ?? 1) > 1) throw new Conflict("This is a vote — pick one of the shortlisted movies");
   await sql`INSERT INTO movie_approvals (night_id, member_id, decision, reason) VALUES (${nightId}, ${memberId}, ${decision}, ${reason})
             ON CONFLICT (night_id, member_id) DO UPDATE SET decision = EXCLUDED.decision, reason = EXCLUDED.reason, created_at = now()`;
   const members = await loadMembers(sql);
@@ -241,12 +316,13 @@ export async function finishMovie(sql: Sql, nightId: string, memberId: string): 
 export async function submitRating(sql: Sql, nightId: string, memberId: string, score: number): Promise<NightDetail> {
   const night = await requireNight(sql, nightId);
   await requireMember(sql, memberId);
-  if (night.status !== "rating") throw new Conflict(night.status === "complete" ? "Ratings are already in" : "Ratings open once the movie is finished");
+  if (night.status !== "rating" && night.status !== "complete") throw new Conflict("Ratings open once the movie is finished");
   // One rating per person per night — the UNIQUE constraint is the backstop.
   const existing = await sql`SELECT id FROM ratings WHERE night_id = ${nightId} AND member_id = ${memberId}`;
   if (existing.length) throw new Conflict("You've already rated this one");
   await sql`INSERT INTO ratings (night_id, member_id, score) VALUES (${nightId}, ${memberId}, ${score})`;
-  await maybeCompleteNight(sql, nightId);
+  // A late rating on an already-complete (backfilled) night just fills a gap.
+  if (night.status === "rating") await maybeCompleteNight(sql, nightId);
   return loadNightDetail(sql, nightId, memberId);
 }
 

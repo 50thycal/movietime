@@ -116,9 +116,20 @@ export interface Prediction {
 }
 
 /** A movie night with everything hanging off it. Ratings are only present once revealed. */
+export interface Vote {
+  id: string;
+  night_id: string;
+  member_id: string;
+  movie_id: string;
+  created_at: string;
+}
+
 export interface NightDetail {
   night: MovieNight;
   movie: Movie;
+  /** All films the picker put forward, in order. One entry for a plain proposal. */
+  candidates: Movie[];
+  votes: Vote[];
   selector: Member;
   approvals: Approval[];
   /** Full scores — only when the night is complete (all ratings in). */

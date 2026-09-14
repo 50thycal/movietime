@@ -2,7 +2,7 @@
 
 import { use } from "react";
 import { ApprovalRow, MovieHeader, STATUS_LABEL } from "@/components/NightCard";
-import { Awards, Predictions, Results, Reviews, Snacks } from "@/components/NightSections";
+import { Awards, LateRating, Predictions, Results, Reviews, Snacks } from "@/components/NightSections";
 import { useApp } from "@/components/Shell";
 import { ErrorNote, Spinner } from "@/components/ui";
 import { useNight } from "@/lib/api";
@@ -31,6 +31,7 @@ export default function MoviePage({ params }: { params: Promise<{ id: string }> 
         )}
       </section>
       <Results detail={data} />
+      <LateRating detail={data} />
       <Awards detail={data} />
       <Predictions detail={data} />
       {n.status !== "rejected" && (

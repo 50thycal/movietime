@@ -7,7 +7,7 @@ import { summarizeRatings } from "@/lib/scoring";
 import { AWARD_META, predictionResults, type AwardKey } from "@/lib/stats";
 import type { Member, NightDetail, SnackKind } from "@/lib/types";
 import { useApp } from "./Shell";
-import { Avatar, ErrorNote, Stars } from "./ui";
+import { Avatar, ErrorNote, ScorePicker, Stars } from "./ui";
 
 export function Results({ detail }: { detail: NightDetail }) {
   const { members } = useApp();
@@ -274,6 +274,37 @@ export function Snacks({ detail }: { detail: NightDetail }) {
         </div>
       </div>
       <ErrorNote error={error} />
+    </section>
+  );
+}
+
+/** A completed night you never rated (backfilled, or you were away): add your score once. */
+export function LateRating({ detail }: { detail: NightDetail }) {
+  const { meId } = useApp();
+  const [score, setScore] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  if (detail.night.status !== "complete" || !meId || detail.rated_member_ids.includes(meId)) return null;
+  async function submit() {
+    if (score == null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await send("POST", `/api/nights/${detail.night.id}/ratings`, { score });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="card flex flex-col gap-3 p-4">
+      <div className="label">You haven&apos;t rated this one</div>
+      <ScorePicker value={score} onChange={setScore} />
+      <ErrorNote error={error} />
+      <button className="btn btn-gold w-full" disabled={score == null || busy} onClick={submit}>
+        {score == null ? "Pick a score" : `Add my ${score}`}
+      </button>
     </section>
   );
 }

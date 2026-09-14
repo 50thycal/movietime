@@ -90,9 +90,17 @@ proposed ──(everyone else approves)──▶ approved ──(Start)──▶
     └──(any rejection / withdraw)──▶ rejected   (selector keeps the turn, picks again)
 ```
 
-- Only the member the rotation points at can propose. Rejections carry an
-  optional reason. Roulette results are only proposed when someone taps
+- Only the member the rotation points at can propose. Tap the **Up Next**
+  card (or use Settings) to change whose turn it is.
+- The picker proposes **one film** (the other three approve or reject, with
+  an optional reason) **or a shortlist of two or three** (everyone votes for
+  one; when all votes are in, the most-voted film wins, and the picker's vote
+  breaks ties). Roulette results are only proposed when someone taps
   **Accept**.
+- **Past movies** can be added from History (search, who picked it, date,
+  optional ratings). They land straight in history without touching the
+  rotation, and anyone who wasn't rated can add their own score later from
+  the movie page.
 - Ratings are 1–10 in half points. Each person sees only their own score
   until every active member has rated; then all scores reveal at once with
   group average, high, low, spread, the picker's score, the average without
@@ -141,6 +149,8 @@ cold start.
 | `snack_items` | item, kind (snack/drink), who brought it, note |
 | `snack_ratings` | 1–5 per member per item |
 | `predictions` | own score + optional group average per member per night |
+| `night_candidates` | the one to three films a proposal put forward |
+| `night_votes` | one vote per member per shortlist proposal |
 
 Awards are derived from this data on read rather than stored, so a season
 summary is always consistent with the underlying ratings.

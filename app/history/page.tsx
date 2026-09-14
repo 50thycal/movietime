@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useApp } from "@/components/Shell";
 import { Avatar, Empty, ErrorNote, Poster, Spinner } from "@/components/ui";
-import { useHistory } from "@/lib/api";
-import { BackfillSheet } from "@/components/sheets";
+import { send, useHistory, useWishlist } from "@/lib/api";
+import { BackfillSheet, WishlistAddSheet } from "@/components/sheets";
+import { useSearchParams } from "next/navigation";
 import { decadeOf, fmtDate, fmtRuntime, fmtScore, RUNTIME_BUCKETS, runtimeBucket } from "@/lib/format";
 
 const SORTS = [
@@ -18,7 +19,18 @@ const SORTS = [
 ] as const;
 
 export default function HistoryPage() {
+  return (
+    <Suspense>
+      <HistoryInner />
+    </Suspense>
+  );
+}
+
+function HistoryInner() {
+  const params = useSearchParams();
+  const [tab, setTab] = useState<"watched" | "wishlist">(params.get("tab") === "wishlist" ? "wishlist" : "watched");
   const { data, error } = useHistory();
+  const { data: wishlist } = useWishlist();
   const { members } = useApp();
   const [selector, setSelector] = useState<string | null>(null);
   const [genre, setGenre] = useState<string | null>(null);
@@ -69,12 +81,20 @@ export default function HistoryPage() {
   if (!data) return <Spinner />;
   const active = [selector, genre, year, minRating, runtime, decade].filter((x) => x != null).length;
 
+  if (tab === "wishlist") {
+    return (
+      <div className="flex flex-col gap-3 pt-1">
+        <Tabs tab={tab} setTab={setTab} watched={entries.length} wished={wishlist?.length ?? 0} />
+        <Wishlist />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-3 pt-1">
+      <Tabs tab={tab} setTab={setTab} watched={entries.length} wished={wishlist?.length ?? 0} />
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-black">
-          History <span className="text-base text-muted">{entries.length}</span>
-        </h1>
+        <div className="text-sm text-muted">{entries.length} watched</div>
         <div className="flex gap-2">
           <button className="chip" onClick={() => setAdding(true)}>
             + Past movie
@@ -171,6 +191,90 @@ export default function HistoryPage() {
                   <div className="text-[11px] text-muted">{fmtDate(e.night.completed_at)}</div>
                 </div>
               </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Tabs({ tab, setTab, watched, wished }: { tab: "watched" | "wishlist"; setTab: (t: "watched" | "wishlist") => void; watched: number; wished: number }) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <button className={`btn ${tab === "watched" ? "btn-gold" : "btn-ghost"} min-h-12`} onClick={() => setTab("watched")}>
+        🎞️ Watched · {watched}
+      </button>
+      <button className={`btn ${tab === "wishlist" ? "btn-gold" : "btn-ghost"} min-h-12`} onClick={() => setTab("wishlist")}>
+        💡 Wishlist · {wished}
+      </button>
+    </div>
+  );
+}
+
+function Wishlist() {
+  const { data, error } = useWishlist();
+  const { members, state, me } = useApp();
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const myTurn = state?.rotation.current?.id === me?.id && !state?.current;
+  if (error) return <ErrorNote error={error} />;
+  if (!data) return <Spinner />;
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm text-muted">Anyone can add. Films drop off once watched.</div>
+        <button className="chip chip-on" onClick={() => setAdding(true)}>
+          + Add
+        </button>
+      </div>
+      <WishlistAddSheet open={adding} onClose={() => setAdding(false)} />
+      {data.length === 0 ? (
+        <Empty title="Wishlist is empty" body="Add the movies you keep meaning to watch. The picker sees this list when it's their turn.">
+          <button className="btn btn-gold mt-2" onClick={() => setAdding(true)}>
+            + Add a movie
+          </button>
+        </Empty>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {data.map((w) => {
+            const who = members.find((m) => m.id === w.added_by);
+            return (
+              <div key={w.id} className="card flex gap-3 p-2">
+                <Poster path={w.movie.poster_path} title={w.movie.title} className="w-16 shrink-0" size="w185" />
+                <div className="min-w-0 flex-1">
+                  <div className="font-black leading-tight">
+                    {w.movie.title} {w.movie.year && <span className="font-bold text-muted">({w.movie.year})</span>}
+                  </div>
+                  <div className="text-xs font-bold text-gold">⏱ {fmtRuntime(w.movie.runtime_min)}</div>
+                  <div className="truncate text-xs text-muted">{w.movie.genres.map((g) => g.name).join(" · ")}</div>
+                  <div className="mt-1 flex items-center gap-1 text-xs text-muted">
+                    <Avatar member={who} size={14} /> {who?.name}
+                    {w.note && <span className="truncate"> · {w.note}</span>}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end justify-between">
+                  <button
+                    className="text-xs text-muted underline"
+                    disabled={busy === w.id}
+                    onClick={async () => {
+                      setBusy(w.id);
+                      try {
+                        await send("DELETE", `/api/wishlist/${w.id}`);
+                      } finally {
+                        setBusy(null);
+                      }
+                    }}
+                  >
+                    remove
+                  </button>
+                  {myTurn && (
+                    <Link href="/?pick=1" className="chip chip-on">
+                      Pick →
+                    </Link>
+                  )}
+                </div>
+              </div>
             );
           })}
         </div>

@@ -1,27 +1,30 @@
 "use client";
 
 import { useState } from "react";
-import { send, useSearch } from "@/lib/api";
+import { send, useSearch, useWishlist } from "@/lib/api";
 import { fmtRuntime } from "@/lib/format";
-import type { NightDetail, TmdbSearchResult } from "@/lib/types";
+import type { Movie, NightDetail, TmdbSearchResult } from "@/lib/types";
 import { rotationOrder } from "@/lib/rotation";
 import { MAX_CANDIDATES } from "@/lib/constants";
 import { useApp } from "./Shell";
 import { Avatar, ErrorNote, Poster, ScorePicker, Sheet, Spinner } from "./ui";
 
-/** Search TMDB and submit one pick, or a shortlist of up to three for a vote. */
+/** Search TMDB and submit one pick, or a shortlist for a vote. Wishlist shows when the search is empty. */
 export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose: () => void; onPicked?: (n: NightDetail) => void }) {
   const [q, setQ] = useState("");
   const [shortlist, setShortlist] = useState<TmdbSearchResult[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const { data, isLoading, error: searchError } = useSearch(q);
+  const { data: wishlist } = useWishlist();
+  const { members } = useApp();
 
   const inList = (m: TmdbSearchResult) => shortlist.some((x) => x.tmdb_id === m.tmdb_id);
+  const fromMovie = (m: Movie): TmdbSearchResult => ({ ...m, popularity: null });
   function toggle(m: TmdbSearchResult) {
     setError(null);
     if (inList(m)) return setShortlist(shortlist.filter((x) => x.tmdb_id !== m.tmdb_id));
-    if (shortlist.length >= MAX_CANDIDATES) return setError(new Error(`Three is the limit. Remove one first.`));
+    if (shortlist.length >= MAX_CANDIDATES) return setError(new Error(`${MAX_CANDIDATES} is the limit. Remove one first.`));
     setShortlist([...shortlist, m]);
   }
 
@@ -43,7 +46,7 @@ export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose:
 
   return (
     <Sheet open={open} onClose={onClose} title="Pick a movie">
-      <p className="mb-2 text-xs text-muted">Tap a result to propose it, or use + to build a shortlist of up to three and let everyone vote.</p>
+      <p className="mb-2 text-xs text-muted">Tap a result to propose it, or use + to build a shortlist (up to six) and let everyone vote.</p>
       <input className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
       {shortlist.length > 0 && (
         <div className="card mb-3 flex flex-col gap-2 p-3">
@@ -63,6 +66,37 @@ export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose:
       )}
       <ErrorNote error={error ?? searchError} />
       {isLoading && !data && <Spinner />}
+      {q.trim().length < 2 && wishlist && wishlist.length > 0 && (
+        <div className="mb-3">
+          <div className="label mb-2">💡 From the wishlist</div>
+          <div className="flex flex-col gap-2">
+            {wishlist.map((w) => {
+              const m = fromMovie(w.movie);
+              const who = members.find((x) => x.id === w.added_by);
+              return (
+                <div key={w.id} className={`card flex gap-3 p-2 ${inList(m) ? "border-gold" : ""}`}>
+                  <button className="flex min-w-0 flex-1 gap-3 text-left active:scale-[0.99]" disabled={busy} onClick={() => (shortlist.length ? toggle(m) : propose([m]))}>
+                    <Poster path={m.poster_path} title={m.title} className="w-12 shrink-0" size="w185" />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-black leading-tight">
+                        {m.title} {m.year && <span className="font-bold text-muted">({m.year})</span>}
+                      </div>
+                      <div className="text-xs text-gold">⏱ {fmtRuntime(m.runtime_min)}</div>
+                      <div className="flex items-center gap-1 text-xs text-muted">
+                        <Avatar member={who} size={14} /> {who?.name}
+                        {w.note && ` · ${w.note}`}
+                      </div>
+                    </div>
+                  </button>
+                  <button className={`chip self-center text-lg ${inList(m) ? "chip-on" : ""}`} onClick={() => toggle(m)} aria-label={inList(m) ? "Remove from shortlist" : "Add to shortlist"}>
+                    {inList(m) ? "✓" : "+"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <div className="flex flex-col gap-2">
         {data?.map((m) => (
           <div key={m.tmdb_id} className={`card flex gap-3 p-2 ${inList(m) ? "border-gold" : ""}`}>
@@ -317,6 +351,51 @@ export function RejectSheet({ night, open, onClose }: { night: NightDetail; open
       <button className="btn btn-bad mt-4 w-full" disabled={busy} onClick={submit}>
         ✕ Reject
       </button>
+    </Sheet>
+  );
+}
+
+/** History → Wishlist → add a film the group wants to get to. */
+export function WishlistAddSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [q, setQ] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState<number | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const { data, isLoading } = useSearch(q);
+  async function add(m: TmdbSearchResult) {
+    setBusy(m.tmdb_id);
+    setError(null);
+    try {
+      await send("POST", "/api/wishlist", { tmdb_id: m.tmdb_id, note: note || null });
+      onClose();
+      setQ("");
+      setNote("");
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(null);
+    }
+  }
+  return (
+    <Sheet open={open} onClose={onClose} title="Add to wishlist">
+      <input className="input mb-2" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
+      <input className="input mb-3" placeholder="Why? (optional)" value={note} maxLength={140} onChange={(e) => setNote(e.target.value)} />
+      <ErrorNote error={error} />
+      {isLoading && !data && <Spinner />}
+      <div className="flex flex-col gap-2">
+        {data?.map((m) => (
+          <button key={m.tmdb_id} className="card flex gap-3 p-2 text-left active:scale-[0.99]" disabled={busy != null} onClick={() => add(m)}>
+            <Poster path={m.poster_path} title={m.title} className="w-12 shrink-0" size="w185" />
+            <div className="min-w-0 flex-1">
+              <div className="font-black leading-tight">
+                {m.title} {m.year && <span className="font-bold text-muted">({m.year})</span>}
+              </div>
+              <div className="text-xs text-muted">{fmtRuntime(m.runtime_min)} · {m.genres.map((g) => g.name).join(", ")}</div>
+            </div>
+            {busy === m.tmdb_id && <Spinner />}
+          </button>
+        ))}
+      </div>
     </Sheet>
   );
 }

@@ -93,10 +93,15 @@ proposed ──(everyone else approves)──▶ approved ──(Start)──▶
 - Only the member the rotation points at can propose. Tap the **Up Next**
   card (or use Settings) to change whose turn it is.
 - The picker proposes **one film** (the other three approve or reject, with
-  an optional reason) **or a shortlist of two or three** (everyone votes for
+  an optional reason) **or a shortlist of two to six** (everyone votes for
   one; when all votes are in, the most-voted film wins, and the picker's vote
   breaks ties). Roulette results are only proposed when someone taps
   **Accept**.
+- **Wishlist**: one shared running list of films the group wants to get to
+  (History → Wishlist). Anyone can add or remove, each entry shows who
+  added it and why, the picker sees the list at the top of the pick sheet
+  and can propose or shortlist straight from it, and a film drops off
+  automatically once it has been watched.
 - **Past movies** can be added from History (search, who picked it, date,
   optional ratings). They land straight in history without touching the
   rotation, and anyone who wasn't rated can add their own score later from
@@ -149,8 +154,9 @@ cold start.
 | `snack_items` | item, kind (snack/drink), who brought it, note |
 | `snack_ratings` | 1–5 per member per item |
 | `predictions` | own score + optional group average per member per night |
-| `night_candidates` | the one to three films a proposal put forward |
+| `night_candidates` | the films a proposal put forward (one, or a shortlist of up to six) |
 | `night_votes` | one vote per member per shortlist proposal |
+| `wishlist` | shared to-watch list: one row per film, who added it, optional note |
 
 Awards are derived from this data on read rather than stored, so a season
 summary is always consistent with the underlying ratings.
@@ -170,7 +176,7 @@ Awards are only given when the data supports them.
 - **Tonight** — big "Up Next" card, current movie with runtime/genres and
   approval status, one context-sensitive action (Pick / Approve / Start /
   Rate / waiting), rotation strip, last movie with group score, roulette.
-- **History** — poster grid with selector, runtime, genres, group rating;
+- **History** — Watched and Wishlist tabs. Watched is a poster grid with selector, runtime, genres, group rating;
   filters by picker, genre, runtime bucket, rating, year watched, release
   decade; sort newest/oldest/highest/lowest/longest/shortest.
 - **Movie** — full record: metadata, revealed scores and breakdown, awards,

@@ -121,7 +121,33 @@ export interface Vote {
   night_id: string;
   member_id: string;
   movie_id: string;
+  /** Coins behind this vote. */
+  amount: number;
   created_at: string;
+}
+
+export interface Budget {
+  initial: number;
+  allowance: number;
+}
+
+export interface CycleInfo {
+  number: number;
+  /** First member in the picking order — the allowance pays out when the turn returns to them. */
+  first_member_id: string | null;
+}
+
+export type TodoKind = "backfill" | "rate_missing" | "approve" | "vote" | "rate_now" | "predict";
+
+export interface Todo {
+  key: string;
+  kind: TodoKind;
+  title: string;
+  detail?: string;
+  href?: string;
+  night_id?: string;
+  /** For one-off tasks that the member ticks off by hand. */
+  dismissible?: boolean;
 }
 
 export interface NightDetail {
@@ -157,6 +183,12 @@ export interface HomeState {
   now: string;
   setup_complete: boolean;
   members: Member[];
+  /** Coin balance per member id. */
+  balances: Record<string, number>;
+  budget: Budget;
+  cycle: CycleInfo;
+  /** The requesting member's to-do list (empty when unknown). */
+  todos: Todo[];
   rotation: RotationInfo;
   current: NightDetail | null;
   last_complete: NightDetail | null;

@@ -241,3 +241,117 @@ test("wishlist is shared and clears itself once a film is watched", async () => 
   for (const m of members.filter((m) => m.active)) await s.submitRating(sql, night.night.id, m.id, 7);
   assert.equal((await s.loadWishlist(sql)).length, 0);
 });
+
+test("coins: starting budget, weighted votes, refunds, and per-cycle allowance", async () => {
+  const sql = await db();
+  const members = await s.loadMembers(sql);
+  const [calvin, molly, sam, jo] = ["Calvin", "Molly", "Sam", "Jo"].map((n) => members.find((m) => m.name === n)!);
+  const active = members.filter((m) => m.active);
+  // Fresh ledger for this test (earlier tests may already have paid a cycle).
+  await sql`DELETE FROM coin_ledger`;
+  await sql`DELETE FROM settings WHERE key IN ('cycle', 'budget')`;
+  // Everyone got the same starting budget exactly once.
+  await s.ensureBudgets(sql);
+  await s.ensureBudgets(sql);
+  let balances = await s.loadBalances(sql);
+  for (const m of active) assert.equal(balances[m.id], 100);
+
+  await s.setBudget(sql, { initial: 100, allowance: 30 });
+  await assert.rejects(s.setBudget(sql, { initial: -1, allowance: 30 }), /Starting budget/);
+
+  // Put Jo last-but-one so the rotation wraps to the first picker after this night.
+  const order = (await s.loadMembers(sql)).filter((m) => m.active).sort((a, b) => a.rotation_position - b.rotation_position);
+  const last = order[order.length - 1];
+  await s.setRotation(sql, last.id);
+  const cycleBefore = (await s.getCycle(sql)).number;
+
+  let night = await s.proposeMovies(sql, last.id, [MOVIE({ tmdb_id: 301, title: "P" }), MOVIE({ tmdb_id: 302, title: "Q" })]);
+  const [p, q] = night.candidates;
+  const others = active.filter((m) => m.id !== last.id);
+
+  // Can't stake more than you have.
+  await assert.rejects(s.castVote(sql, night.night.id, others[0].id, p.id, 101), /only have 100/);
+  await assert.rejects(s.castVote(sql, night.night.id, others[0].id, p.id, -1), /whole number/);
+  // Stake, then re-stake: the first stake is refunded.
+  await s.castVote(sql, night.night.id, others[0].id, p.id, 40);
+  assert.equal((await s.loadBalances(sql))[others[0].id], 60);
+  await s.castVote(sql, night.night.id, others[0].id, q.id, 10);
+  assert.equal((await s.loadBalances(sql))[others[0].id], 90);
+  // Can spend down to zero.
+  await s.castVote(sql, night.night.id, others[1].id, p.id, 100);
+  assert.equal((await s.loadBalances(sql))[others[1].id], 0);
+  await s.castVote(sql, night.night.id, others[2].id, q.id, 0);
+  night = await s.castVote(sql, night.night.id, last.id, q.id, 5);
+  // p has 100 coins, q has 10 + 1 (coinless) + 5 = 16 → p wins.
+  assert.equal(night.night.status, "approved");
+  assert.equal(night.movie.title, "P");
+  assert.equal(night.votes.find((v) => v.member_id === others[1].id)?.amount, 100);
+
+  // Withdrawing an approved night refunds every stake.
+  await s.withdrawProposal(sql, night.night.id, last.id);
+  balances = await s.loadBalances(sql);
+  assert.equal(balances[others[1].id], 100);
+  assert.equal(balances[others[0].id], 100);
+  assert.equal(balances[last.id], 100);
+
+  // Completing a night whose next picker is first in the order starts a new cycle → allowance.
+  night = await s.proposeMovie(sql, last.id, MOVIE({ tmdb_id: 303, title: "R" }));
+  for (const o of others) night = await s.decideApproval(sql, night.night.id, o.id, "approve", null);
+  await s.startMovie(sql, night.night.id, last.id);
+  await s.finishMovie(sql, night.night.id, last.id);
+  for (const m of active) await s.submitRating(sql, night.night.id, m.id, 8);
+  assert.equal(await s.currentSelectorId(sql), order[0].id);
+  assert.equal((await s.getCycle(sql)).number, cycleBefore + 1);
+  balances = await s.loadBalances(sql);
+  for (const m of active) assert.equal(balances[m.id], 130);
+  // A manual new cycle pays again; a repeat of the same cycle number can't (unique index).
+  await s.startNewCycle(sql);
+  assert.equal((await s.loadBalances(sql))[calvin.id], 160);
+  await assert.rejects(
+    sql`INSERT INTO coin_ledger (member_id, amount, reason, cycle) VALUES (${calvin.id}, 30, 'allowance', ${(await s.getCycle(sql)).number})`,
+  );
+  await s.adjustCoins(sql, molly.id, -10);
+  assert.equal((await s.loadBalances(sql))[molly.id], 150);
+  void sam;
+  void jo;
+});
+
+test("to-dos: backfill one-off, unrated films, and live actions", async () => {
+  const sql = await db();
+  const members = await s.loadMembers(sql);
+  const calvin = members.find((m) => m.name === "Calvin")!;
+  const molly = members.find((m) => m.name === "Molly")!;
+  // Backfill a film Molly never rated.
+  await s.backfillNight(sql, calvin.id, MOVIE({ tmdb_id: 404, title: "Unrated One" }), calvin.id, new Date("2024-01-01T20:00:00Z"), [{ member_id: calvin.id, score: 7 }]);
+  let home = await s.loadHomeState(sql, molly.id);
+  assert.ok(home.todos.some((t) => t.kind === "backfill" && t.dismissible));
+  const missing = home.todos.filter((t) => t.kind === "rate_missing");
+  assert.ok(missing.some((t) => t.title === "Rate Unrated One"));
+  assert.equal(typeof home.balances[molly.id], "number");
+  assert.equal(typeof home.budget.allowance, "number");
+
+  // Ticking the one-off removes it; un-ticking brings it back.
+  await s.completeTask(sql, molly.id, s.BACKFILL_TASK);
+  home = await s.loadHomeState(sql, molly.id);
+  assert.ok(!home.todos.some((t) => t.kind === "backfill"));
+  await assert.rejects(s.completeTask(sql, molly.id, "nope"), /Unknown task/);
+  await s.reopenTask(sql, molly.id, s.BACKFILL_TASK);
+  assert.ok((await s.loadHomeState(sql, molly.id)).todos.some((t) => t.kind === "backfill"));
+
+  // Rating it clears the rate_missing item.
+  const night = (await s.loadHistory(sql)).find((h) => h.movie.title === "Unrated One")!;
+  await s.submitRating(sql, night.night.id, molly.id, 6);
+  home = await s.loadHomeState(sql, molly.id);
+  assert.ok(!home.todos.some((t) => t.title === "Rate Unrated One"));
+
+  // Live: a shortlist vote shows as a to-do for those who haven't voted.
+  const current = (await s.currentSelectorId(sql))!;
+  const proposal = await s.proposeMovies(sql, current, [MOVIE({ tmdb_id: 405, title: "V1" }), MOVIE({ tmdb_id: 406, title: "V2" })]);
+  const other = members.find((m) => m.active && m.id !== current)!;
+  home = await s.loadHomeState(sql, other.id);
+  assert.ok(home.todos.some((t) => t.kind === "vote"));
+  await s.castVote(sql, proposal.night.id, other.id, proposal.candidates[0].id, 0);
+  home = await s.loadHomeState(sql, other.id);
+  assert.ok(!home.todos.some((t) => t.kind === "vote"));
+  await s.withdrawProposal(sql, proposal.night.id, current);
+});

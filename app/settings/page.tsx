@@ -64,8 +64,13 @@ export default function SettingsPage() {
         {state.current && <div className="text-xs text-muted">Locked while a movie is in play.</div>}
       </section>
 
+      <CoinsSection />
+
       <section className="card flex flex-col gap-3 p-4">
-        <div className="label">Members &amp; rotation order</div>
+        <div className="label">Picking order (one cycle = one full pass)</div>
+        <p className="text-xs text-muted">
+          Cycle {state.cycle.number}. When the turn comes back round to {members.find((m) => m.id === state.cycle.first_member_id)?.name ?? "the first person"}, a new cycle starts and everyone gets their allowance.
+        </p>
         {members
           .slice()
           .sort((a, b) => a.rotation_position - b.rotation_position)
@@ -102,6 +107,71 @@ export default function SettingsPage() {
     await send("PATCH", `/api/members/${a.id}`, { rotation_position: b.rotation_position });
     await send("PATCH", `/api/members/${b.id}`, { rotation_position: a.rotation_position });
   }
+}
+
+function CoinsSection() {
+  const { state, members } = useApp();
+  const [initial, setInitial] = useState(String(state?.budget.initial ?? 100));
+  const [allowance, setAllowance] = useState(String(state?.budget.allowance ?? 50));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [saved, setSaved] = useState(false);
+  if (!state) return null;
+  async function run(fn: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await fn();
+      setSaved(true);
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="card flex flex-col gap-3 p-4">
+      <div className="label">🪙 Voting coins</div>
+      <p className="text-xs text-muted">Everyone starts with the same budget and can stake any of it on shortlist votes. A new cycle pays everyone the allowance.</p>
+      <div className="grid grid-cols-2 gap-2">
+        <label className="text-xs font-bold text-muted">
+          Starting budget
+          <input type="number" min={0} className="input mt-1" value={initial} onChange={(e) => setInitial(e.target.value)} />
+        </label>
+        <label className="text-xs font-bold text-muted">
+          Allowance per cycle
+          <input type="number" min={0} className="input mt-1" value={allowance} onChange={(e) => setAllowance(e.target.value)} />
+        </label>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <button className="btn btn-ghost" disabled={busy} onClick={() => run(() => send("POST", "/api/budget", { initial: Number(initial), allowance: Number(allowance) }))}>
+          {saved ? "Saved ✓" : "Save amounts"}
+        </button>
+        <button className="btn btn-gold" disabled={busy} onClick={() => run(() => send("POST", "/api/budget", { action: "new_cycle" }))}>
+          Pay allowance now
+        </button>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {members
+          .filter((m) => m.active)
+          .map((m) => (
+            <div key={m.id} className="flex items-center gap-2 text-sm">
+              <Avatar member={m} size={24} />
+              <span className="flex-1 font-bold">{m.name}</span>
+              <button className="chip" disabled={busy} onClick={() => run(() => send("POST", "/api/budget", { member_id: m.id, delta: -10 }))} aria-label={`Take 10 from ${m.name}`}>
+                −10
+              </button>
+              <span className="w-14 text-right text-lg font-black text-gold">{state.balances[m.id] ?? 0}</span>
+              <button className="chip" disabled={busy} onClick={() => run(() => send("POST", "/api/budget", { member_id: m.id, delta: 10 }))} aria-label={`Give 10 to ${m.name}`}>
+                +10
+              </button>
+            </div>
+          ))}
+      </div>
+      <ErrorNote error={error} />
+    </section>
+  );
 }
 
 function EditMember({ member, onClose, run, busy }: { member: Member; onClose: () => void; run: (fn: () => Promise<unknown>) => Promise<void>; busy: boolean }) {

@@ -5,7 +5,7 @@
  */
 import type { Sql } from "./db";
 import { Conflict, NotFound, BadRequest } from "./http";
-import { nextAfter, rotationInfo } from "./rotation";
+import { nextAfter, rotationInfo, rotationOrder } from "./rotation";
 import { approvalOutcome, ratingsRevealed, voteOutcome } from "./scoring";
 import { nightAwards, type Award, type Dataset, type NightData } from "./stats";
 import type {
@@ -24,6 +24,9 @@ import type {
   SnackRating,
   TmdbSearchResult,
   WishlistEntry,
+  Budget,
+  CycleInfo,
+  Todo,
 } from "./types";
 import { ACTIVE_STATUSES } from "./types";
 import { mean, round1 } from "./scoring";
@@ -75,6 +78,7 @@ export async function setupMembers(sql: Sql, names: string[]): Promise<Member[]>
   }
   await setSetting(sql, "rotation", { member_id: members[0].id });
   await setSetting(sql, "setup_complete", true);
+  await ensureBudgets(sql, members);
   return members;
 }
 
@@ -161,18 +165,27 @@ export async function loadNightDetail(sql: Sql, nightId: string, me: string | nu
 export async function loadHomeState(sql: Sql, me: string | null): Promise<HomeState> {
   const members = await loadMembers(sql);
   const setupComplete = members.length > 0;
+  if (setupComplete) await ensureBudgets(sql, members);
   const currentId = await currentSelectorId(sql);
-  const [active, last, countRows] = await Promise.all([
+  const [active, last, countRows, balances, budget, cycle] = await Promise.all([
     activeNight(sql),
     sql`SELECT * FROM movie_nights WHERE status = 'complete' ORDER BY completed_at DESC LIMIT 1`,
     sql`SELECT count(*)::int AS n FROM movie_nights WHERE status = 'complete'`,
+    loadBalances(sql),
+    getBudget(sql),
+    getCycle(sql, members),
   ]);
+  const current = active ? await loadNightDetail(sql, active.id, me) : null;
   return {
     now: new Date().toISOString(),
     setup_complete: setupComplete,
     members,
+    balances,
+    budget,
+    cycle,
+    todos: me ? await loadTodos(sql, me, current) : [],
     rotation: rotationInfo(members, currentId),
-    current: active ? await loadNightDetail(sql, active.id, me) : null,
+    current,
     last_complete: last.length ? await loadNightDetail(sql, (last[0] as MovieNight).id, me) : null,
     watched_count: Number(countRows[0]?.n ?? 0),
   };
@@ -209,16 +222,28 @@ export async function proposeMovie(sql: Sql, memberId: string, movie: TmdbSearch
   return proposeMovies(sql, memberId, [movie]);
 }
 
-/** Vote for one of the shortlisted films. When everyone has voted, the winner is set. */
-export async function castVote(sql: Sql, nightId: string, memberId: string, movieId: string): Promise<NightDetail> {
+/**
+ * Vote for one of the shortlisted films, putting `amount` coins behind it.
+ * Re-voting refunds the previous stake and charges the new one. When everyone
+ * has voted, the winner is set.
+ */
+export async function castVote(sql: Sql, nightId: string, memberId: string, movieId: string, amount = 0): Promise<NightDetail> {
   const night = await requireNight(sql, nightId);
   await requireMember(sql, memberId);
   if (night.status !== "proposed") throw new Conflict("Voting is closed");
+  if (!Number.isInteger(amount) || amount < 0) throw new BadRequest("Coins must be a whole number");
   const candidates = await sql`SELECT movie_id FROM night_candidates WHERE night_id = ${nightId} ORDER BY position`;
   if (candidates.length < 2) throw new Conflict("This proposal isn't a vote");
   if (!candidates.some((c) => c.movie_id === movieId)) throw new BadRequest("That movie isn't on the shortlist");
-  await sql`INSERT INTO night_votes (night_id, member_id, movie_id) VALUES (${nightId}, ${memberId}, ${movieId})
-            ON CONFLICT (night_id, member_id) DO UPDATE SET movie_id = EXCLUDED.movie_id, created_at = now()`;
+  await ensureBudgets(sql);
+  const previous = (await sql`SELECT amount FROM night_votes WHERE night_id = ${nightId} AND member_id = ${memberId}`) as { amount: number }[];
+  const prevAmount = previous[0]?.amount ?? 0;
+  const balance = (await loadBalances(sql))[memberId] ?? 0;
+  if (amount > balance + prevAmount) throw new Conflict(`You only have ${balance + prevAmount} coins`);
+  if (prevAmount > 0) await sql`INSERT INTO coin_ledger (member_id, amount, reason, night_id) VALUES (${memberId}, ${prevAmount}, 'refund', ${nightId})`;
+  if (amount > 0) await sql`INSERT INTO coin_ledger (member_id, amount, reason, night_id) VALUES (${memberId}, ${-amount}, 'vote', ${nightId})`;
+  await sql`INSERT INTO night_votes (night_id, member_id, movie_id, amount) VALUES (${nightId}, ${memberId}, ${movieId}, ${amount})
+            ON CONFLICT (night_id, member_id) DO UPDATE SET movie_id = EXCLUDED.movie_id, amount = EXCLUDED.amount, created_at = now()`;
   const members = await loadMembers(sql);
   const votes = (await sql`SELECT * FROM night_votes WHERE night_id = ${nightId}`) as Vote[];
   const winner = voteOutcome(
@@ -264,6 +289,7 @@ export async function withdrawProposal(sql: Sql, nightId: string, memberId: stri
   if (night.selector_id !== memberId) throw new Conflict("Only the picker can withdraw a proposal");
   if (night.status !== "proposed" && night.status !== "approved") throw new Conflict("This movie can't be withdrawn now");
   await sql`UPDATE movie_nights SET status = 'rejected' WHERE id = ${nightId}`;
+  await refundVotes(sql, nightId);
 }
 
 export async function decideApproval(
@@ -348,7 +374,132 @@ export async function completeNight(sql: Sql, nightId: string, members?: Member[
   const next = nextAfter(all, rows[0].selector_id);
   if (next) await setSetting(sql, "rotation", { member_id: next.id });
   await sql`DELETE FROM wishlist WHERE movie_id = ${rows[0].movie_id}`;
+  // The turn coming back round to the first picker starts a new cycle, and a
+  // new cycle pays everyone their allowance.
+  const order = rotationOrder(all);
+  if (next && order.length > 1 && next.id === order[0].id) await startNewCycle(sql, all);
   return true;
+}
+
+// ---------------------------------------------------------------- coins
+
+export const DEFAULT_BUDGET: Budget = { initial: 100, allowance: 50 };
+
+export async function getBudget(sql: Sql): Promise<Budget> {
+  const v = await getSetting<Partial<Budget>>(sql, "budget");
+  return { initial: v?.initial ?? DEFAULT_BUDGET.initial, allowance: v?.allowance ?? DEFAULT_BUDGET.allowance };
+}
+
+export async function setBudget(sql: Sql, budget: Budget) {
+  if (!Number.isInteger(budget.initial) || budget.initial < 0 || budget.initial > 100000) throw new BadRequest("Starting budget must be 0–100000");
+  if (!Number.isInteger(budget.allowance) || budget.allowance < 0 || budget.allowance > 100000) throw new BadRequest("Allowance must be 0–100000");
+  await setSetting(sql, "budget", budget);
+}
+
+export async function getCycle(sql: Sql, members?: Member[]): Promise<CycleInfo> {
+  const v = await getSetting<{ number: number }>(sql, "cycle");
+  const order = rotationOrder(members ?? (await loadMembers(sql)));
+  return { number: v?.number ?? 1, first_member_id: order[0]?.id ?? null };
+}
+
+/** Every member gets the starting budget exactly once (the partial unique index makes this idempotent). */
+export async function ensureBudgets(sql: Sql, members?: Member[]) {
+  const all = members ?? (await loadMembers(sql));
+  const budget = await getBudget(sql);
+  for (const m of all) {
+    await sql`INSERT INTO coin_ledger (member_id, amount, reason) VALUES (${m.id}, ${budget.initial}, 'initial')
+              ON CONFLICT (member_id) WHERE reason = 'initial' DO NOTHING`;
+  }
+}
+
+export async function loadBalances(sql: Sql): Promise<Record<string, number>> {
+  const rows = await sql`SELECT member_id, coalesce(sum(amount), 0)::int AS balance FROM coin_ledger GROUP BY member_id`;
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.member_id as string] = Number(r.balance);
+  return out;
+}
+
+/** Bump the cycle counter and pay every active member their allowance (once per cycle). */
+export async function startNewCycle(sql: Sql, members?: Member[]): Promise<CycleInfo> {
+  const all = members ?? (await loadMembers(sql));
+  const current = await getSetting<{ number: number }>(sql, "cycle");
+  const number = (current?.number ?? 1) + 1;
+  await setSetting(sql, "cycle", { number });
+  const budget = await getBudget(sql);
+  if (budget.allowance > 0) {
+    for (const m of all.filter((x) => x.active)) {
+      await sql`INSERT INTO coin_ledger (member_id, amount, reason, cycle) VALUES (${m.id}, ${budget.allowance}, 'allowance', ${number})
+                ON CONFLICT (member_id, cycle) WHERE reason = 'allowance' DO NOTHING`;
+    }
+  }
+  return getCycle(sql, all);
+}
+
+/** Settings: hand-correct someone's balance. */
+export async function adjustCoins(sql: Sql, memberId: string, delta: number) {
+  await requireMember(sql, memberId);
+  if (!Number.isInteger(delta) || delta === 0 || Math.abs(delta) > 100000) throw new BadRequest("Amount must be a non-zero whole number");
+  await sql`INSERT INTO coin_ledger (member_id, amount, reason) VALUES (${memberId}, ${delta}, 'adjust')`;
+}
+
+async function refundVotes(sql: Sql, nightId: string) {
+  const votes = (await sql`SELECT member_id, amount FROM night_votes WHERE night_id = ${nightId} AND amount > 0`) as { member_id: string; amount: number }[];
+  for (const v of votes) {
+    await sql`INSERT INTO coin_ledger (member_id, amount, reason, night_id) VALUES (${v.member_id}, ${v.amount}, 'refund', ${nightId})`;
+  }
+  await sql`UPDATE night_votes SET amount = 0 WHERE night_id = ${nightId}`;
+}
+
+// ---------------------------------------------------------------- to-dos
+
+export const BACKFILL_TASK = "backfill_old_picks";
+
+/** What this member still owes the group, derived from live data plus ticked one-offs. */
+export async function loadTodos(sql: Sql, memberId: string, current: NightDetail | null): Promise<Todo[]> {
+  const todos: Todo[] = [];
+  const done = new Set((await sql`SELECT task_key FROM member_tasks WHERE member_id = ${memberId}`).map((r) => r.task_key as string));
+
+  if (current) {
+    const n = current.night;
+    const isSelector = n.selector_id === memberId;
+    if (n.status === "proposed" && current.candidates.length > 1 && !current.votes.some((v) => v.member_id === memberId)) {
+      todos.push({ key: `vote:${n.id}`, kind: "vote", title: `Vote on ${current.selector.name}'s shortlist`, href: "/", night_id: n.id });
+    } else if (n.status === "proposed" && current.candidates.length <= 1 && !isSelector && !current.approvals.some((a) => a.member_id === memberId)) {
+      todos.push({ key: `approve:${n.id}`, kind: "approve", title: `Approve or reject ${current.movie.title}`, href: "/", night_id: n.id });
+    } else if (n.status === "rating" && !current.rated_member_ids.includes(memberId)) {
+      todos.push({ key: `rate:${n.id}`, kind: "rate_now", title: `Rate ${current.movie.title}`, href: "/", night_id: n.id });
+    }
+  }
+
+  if (!done.has(BACKFILL_TASK)) {
+    todos.push({
+      key: BACKFILL_TASK,
+      kind: "backfill",
+      title: "Add the movies you picked before MovieTime",
+      detail: "So your picker score and history are complete.",
+      href: `/history?backfill=1`,
+      dismissible: true,
+    });
+  }
+
+  const unrated = (await sql`
+    SELECT n.id, m.title FROM movie_nights n JOIN movies m ON m.id = n.movie_id
+    WHERE n.status = 'complete' AND NOT EXISTS (SELECT 1 FROM ratings r WHERE r.night_id = n.id AND r.member_id = ${memberId})
+    ORDER BY n.completed_at DESC`) as { id: string; title: string }[];
+  for (const u of unrated) {
+    todos.push({ key: `rate_missing:${u.id}`, kind: "rate_missing", title: `Rate ${u.title}`, detail: "You never scored this one.", href: `/movie/${u.id}`, night_id: u.id });
+  }
+  return todos;
+}
+
+export async function completeTask(sql: Sql, memberId: string, key: string) {
+  await requireMember(sql, memberId);
+  if (key !== BACKFILL_TASK) throw new BadRequest("Unknown task");
+  await sql`INSERT INTO member_tasks (member_id, task_key) VALUES (${memberId}, ${key}) ON CONFLICT DO NOTHING`;
+}
+
+export async function reopenTask(sql: Sql, memberId: string, key: string) {
+  await sql`DELETE FROM member_tasks WHERE member_id = ${memberId} AND task_key = ${key}`;
 }
 
 // ---------------------------------------------------------------- wishlist

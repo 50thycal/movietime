@@ -155,4 +155,30 @@ export const SCHEMA_STATEMENTS: string[] = [
      note       text        CHECK (note IS NULL OR length(note) <= 140),
      created_at timestamptz NOT NULL DEFAULT now()
    )`,
+
+  // Voting power. Every coin movement is a ledger row; a balance is the sum.
+  // `cycle` is set on allowance rows so a cycle can never pay out twice.
+  `CREATE TABLE IF NOT EXISTS coin_ledger (
+     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+     member_id  uuid        NOT NULL REFERENCES members(id),
+     amount     integer     NOT NULL,
+     reason     text        NOT NULL CHECK (reason IN ('initial','allowance','vote','refund','adjust')),
+     night_id   uuid        REFERENCES movie_nights(id) ON DELETE SET NULL,
+     cycle      integer,
+     created_at timestamptz NOT NULL DEFAULT now()
+   )`,
+  `CREATE INDEX IF NOT EXISTS coin_ledger_member_idx ON coin_ledger (member_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS coin_ledger_one_initial ON coin_ledger (member_id) WHERE reason = 'initial'`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS coin_ledger_one_allowance_per_cycle ON coin_ledger (member_id, cycle) WHERE reason = 'allowance'`,
+
+  // How many coins a vote carries. Existing votes count as 0.
+  `ALTER TABLE night_votes ADD COLUMN IF NOT EXISTS amount integer NOT NULL DEFAULT 0 CHECK (amount >= 0)`,
+
+  // One-off checklist items a member has ticked (e.g. "added my old picks").
+  `CREATE TABLE IF NOT EXISTS member_tasks (
+     member_id uuid        NOT NULL REFERENCES members(id),
+     task_key  text        NOT NULL,
+     done_at   timestamptz NOT NULL DEFAULT now(),
+     PRIMARY KEY (member_id, task_key)
+   )`,
 ];

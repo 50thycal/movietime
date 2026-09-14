@@ -161,6 +161,10 @@ test("shortlist vote picks the winner once everyone has voted", async () => {
   const sam = members.find((m) => m.name === "Sam")!;
   await s.setRotation(sql, jo.id);
   await assert.rejects(s.proposeMovies(sql, jo.id, []), /at least one/);
+  await assert.rejects(
+    s.proposeMovies(sql, jo.id, Array.from({ length: 7 }, (_, i) => MOVIE({ tmdb_id: 500 + i, title: `X${i}` }))),
+    /At most 6/,
+  );
   let night = await s.proposeMovies(sql, jo.id, [
     MOVIE({ tmdb_id: 11, title: "A" }),
     MOVIE({ tmdb_id: 12, title: "B" }),
@@ -207,4 +211,33 @@ test("backfilled movies land in history without touching the rotation", async ()
   await assert.rejects(s.submitRating(sql, night.night.id, sam.id, 5), /already/);
   const history = await s.loadHistory(sql);
   assert.ok(history.some((h) => h.movie.title === "Old One" && h.night.completed_at && new Date(h.night.completed_at).getFullYear() === 2024));
+});
+
+test("wishlist is shared and clears itself once a film is watched", async () => {
+  const sql = await db();
+  const members = await s.loadMembers(sql);
+  const calvin = members.find((m) => m.name === "Calvin")!;
+  const molly = members.find((m) => m.name === "Molly")!;
+  let list = await s.addToWishlist(sql, calvin.id, MOVIE({ tmdb_id: 900, title: "Wish A" }), "heard it's great");
+  list = await s.addToWishlist(sql, molly.id, MOVIE({ tmdb_id: 901, title: "Wish B" }), null);
+  assert.deepEqual(list.map((w) => w.movie.title), ["Wish B", "Wish A"]);
+  assert.equal(list[1].added_by, calvin.id);
+  assert.equal(list[1].note, "heard it's great");
+  // Adding the same film twice is a no-op.
+  list = await s.addToWishlist(sql, molly.id, MOVIE({ tmdb_id: 900, title: "Wish A" }), null);
+  assert.equal(list.length, 2);
+  // Already-watched films are refused.
+  await assert.rejects(s.addToWishlist(sql, molly.id, MOVIE({ tmdb_id: 603 }), null), /already watched/);
+  // Anyone can remove.
+  list = await s.removeFromWishlist(sql, molly.id, list.find((w) => w.movie.title === "Wish B")!.id);
+  assert.deepEqual(list.map((w) => w.movie.title), ["Wish A"]);
+  // Watching Wish A drops it off the list.
+  const current = await s.currentSelectorId(sql);
+  const others = members.filter((m) => m.active && m.id !== current);
+  let night = await s.proposeMovie(sql, current!, MOVIE({ tmdb_id: 900, title: "Wish A" }));
+  for (const o of others) night = await s.decideApproval(sql, night.night.id, o.id, "approve", null);
+  await s.startMovie(sql, night.night.id, current!);
+  await s.finishMovie(sql, night.night.id, current!);
+  for (const m of members.filter((m) => m.active)) await s.submitRating(sql, night.night.id, m.id, 7);
+  assert.equal((await s.loadWishlist(sql)).length, 0);
 });

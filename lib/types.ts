@@ -187,3 +187,11 @@ export interface TmdbSearchResult {
   tmdb_votes: number | null;
   popularity: number | null;
 }
+
+export interface WishlistEntry {
+  id: string;
+  movie: Movie;
+  added_by: string;
+  note: string | null;
+  created_at: string;
+}

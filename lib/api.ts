@@ -2,7 +2,7 @@
 
 import useSWR, { mutate } from "swr";
 import { getMemberId } from "./me";
-import type { HomeState, HistoryEntry, Member, NightDetail, TmdbSearchResult, Genre } from "./types";
+import type { HomeState, HistoryEntry, Member, NightDetail, TmdbSearchResult, Genre, WishlistEntry } from "./types";
 
 function headers(): Record<string, string> {
   const me = getMemberId();
@@ -36,6 +36,9 @@ export function useHistory() {
 export function useStats() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return useSWR<any>("/api/stats", fetcher, { ...SHARED_OPTS, refreshInterval: 30_000 });
+}
+export function useWishlist() {
+  return useSWR<WishlistEntry[]>("/api/wishlist", fetcher, SHARED_OPTS);
 }
 export function useGenres() {
   return useSWR<Genre[]>("/api/genres", fetcher, { revalidateOnFocus: false });

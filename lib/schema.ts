@@ -126,7 +126,7 @@ export const SCHEMA_STATEMENTS: string[] = [
      UNIQUE (night_id, member_id)
    )`,
 
-  // A proposal may carry up to three candidate films. With one candidate the
+  // A proposal may carry several candidate films (cap in lib/constants.ts). With one candidate the
   // group approves or rejects; with more, everyone votes and the winner
   // becomes movie_nights.movie_id.
   `CREATE TABLE IF NOT EXISTS night_candidates (
@@ -144,5 +144,15 @@ export const SCHEMA_STATEMENTS: string[] = [
      movie_id   uuid        NOT NULL REFERENCES movies(id),
      created_at timestamptz NOT NULL DEFAULT now(),
      UNIQUE (night_id, member_id)
+   )`,
+
+  // One shared running list of films the group wants to get to. A film drops
+  // off automatically once a night with it completes.
+  `CREATE TABLE IF NOT EXISTS wishlist (
+     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+     movie_id   uuid        NOT NULL UNIQUE REFERENCES movies(id),
+     added_by   uuid        NOT NULL REFERENCES members(id),
+     note       text        CHECK (note IS NULL OR length(note) <= 140),
+     created_at timestamptz NOT NULL DEFAULT now()
    )`,
 ];

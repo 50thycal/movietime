@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { useWishlist } from "@/lib/api";
 import { ApprovalRow, MovieHeader, STATUS_LABEL } from "@/components/NightCard";
 import { useApp } from "@/components/Shell";
 import { ChangePickerSheet, PickSheet, PredictSheet, RateSheet, RejectSheet } from "@/components/sheets";
@@ -14,8 +16,22 @@ import type { NightDetail } from "@/lib/types";
 type Open = "pick" | "rate" | "predict" | "reject" | "picker" | null;
 
 export default function Tonight() {
+  return (
+    <Suspense>
+      <TonightInner />
+    </Suspense>
+  );
+}
+
+function TonightInner() {
   const { state, me, members } = useApp();
   const [open, setOpen] = useState<Open>(null);
+  const params = useSearchParams();
+  const { data: wishlist } = useWishlist();
+  // /?pick=1 (from the wishlist's "Pick →") opens the pick sheet straight away.
+  useEffect(() => {
+    if (params.get("pick") === "1") setOpen("pick");
+  }, [params]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   if (!state || !me) return null;
@@ -98,9 +114,14 @@ export default function Tonight() {
               Waiting for <b className="text-ink">{turn?.name}</b> to pick. Nudge them.
             </div>
           )}
-          <Link href="/roulette" className="btn btn-ghost w-full">
-            🎲 No idea? Spin the roulette
-          </Link>
+          <div className="grid grid-cols-2 gap-2">
+            <Link href="/history?tab=wishlist" className="btn btn-ghost">
+              💡 Wishlist{wishlist?.length ? ` · ${wishlist.length}` : ""}
+            </Link>
+            <Link href="/roulette" className="btn btn-ghost">
+              🎲 Roulette
+            </Link>
+          </div>
         </section>
       )}
 

@@ -23,6 +23,7 @@ import type {
   Vote,
   SnackRating,
   TmdbSearchResult,
+  WishlistEntry,
 } from "./types";
 import { ACTIVE_STATUSES } from "./types";
 import { mean, round1 } from "./scoring";
@@ -183,8 +184,8 @@ import { MAX_CANDIDATES } from "./constants";
 export { MAX_CANDIDATES };
 
 /**
- * Propose one film (group approves/rejects) or a shortlist of up to three
- * (everyone votes, winner becomes the movie).
+ * Propose one film (group approves/rejects) or a shortlist of up to
+ * MAX_CANDIDATES (everyone votes, winner becomes the movie).
  */
 export async function proposeMovies(sql: Sql, memberId: string, movies: TmdbSearchResult[]): Promise<NightDetail> {
   const member = await requireMember(sql, memberId);
@@ -346,7 +347,36 @@ export async function completeNight(sql: Sql, nightId: string, members?: Member[
   const all = members ?? (await loadMembers(sql));
   const next = nextAfter(all, rows[0].selector_id);
   if (next) await setSetting(sql, "rotation", { member_id: next.id });
+  await sql`DELETE FROM wishlist WHERE movie_id = ${rows[0].movie_id}`;
   return true;
+}
+
+// ---------------------------------------------------------------- wishlist
+
+/** Films the group wants to get to, minus anything already watched. */
+export async function loadWishlist(sql: Sql): Promise<WishlistEntry[]> {
+  const rows = await sql`
+    SELECT w.id, w.added_by, w.note, w.created_at, row_to_json(m.*) AS movie
+    FROM wishlist w JOIN movies m ON m.id = w.movie_id
+    WHERE NOT EXISTS (SELECT 1 FROM movie_nights n WHERE n.movie_id = w.movie_id AND n.status = 'complete')
+    ORDER BY w.created_at DESC`;
+  return rows.map((r) => ({ id: r.id, added_by: r.added_by, note: r.note, created_at: r.created_at, movie: r.movie as Movie }));
+}
+
+export async function addToWishlist(sql: Sql, memberId: string, movie: TmdbSearchResult, note: string | null): Promise<WishlistEntry[]> {
+  await requireMember(sql, memberId);
+  const row = await upsertMovie(sql, movie);
+  const watched = await sql`SELECT 1 FROM movie_nights WHERE movie_id = ${row.id} AND status = 'complete' LIMIT 1`;
+  if (watched.length) throw new Conflict("You've already watched that one");
+  await sql`INSERT INTO wishlist (movie_id, added_by, note) VALUES (${row.id}, ${memberId}, ${note}) ON CONFLICT (movie_id) DO NOTHING`;
+  return loadWishlist(sql);
+}
+
+/** Anyone in the group can take a film off the shared list. */
+export async function removeFromWishlist(sql: Sql, memberId: string, id: string): Promise<WishlistEntry[]> {
+  await requireMember(sql, memberId);
+  await sql`DELETE FROM wishlist WHERE id = ${id}`;
+  return loadWishlist(sql);
 }
 
 /** Settings → skip / fix the rotation by hand. */

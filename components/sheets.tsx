@@ -4,6 +4,8 @@ import { useState } from "react";
 import { send, useSearch, useWishlist } from "@/lib/api";
 import { fmtRuntime } from "@/lib/format";
 import type { Movie, NightDetail, TmdbSearchResult } from "@/lib/types";
+import { useRouter } from "next/navigation";
+import { fmtDate } from "@/lib/format";
 import { rotationOrder } from "@/lib/rotation";
 import { MAX_CANDIDATES } from "@/lib/constants";
 import { useApp } from "./Shell";
@@ -395,6 +397,91 @@ export function WishlistAddSheet({ open, onClose }: { open: boolean; onClose: ()
             {busy === m.tmdb_id && <Spinner />}
           </button>
         ))}
+      </div>
+    </Sheet>
+  );
+}
+
+/** Movie page → Edit: correct who picked a finished night, when it was watched, or drop it. */
+export function EditNightSheet({ detail, open, onClose }: { detail: NightDetail; open: boolean; onClose: () => void }) {
+  const { members } = useApp();
+  const router = useRouter();
+  const watched = detail.night.watched_at ?? detail.night.completed_at;
+  const [selector, setSelector] = useState(detail.night.selector_id);
+  const [date, setDate] = useState(() => (watched ? new Date(watched).toISOString().slice(0, 10) : ""));
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const active = members.filter((m) => m.active || m.id === detail.night.selector_id);
+
+  async function save() {
+    setBusy(true);
+    setError(null);
+    try {
+      // Keep the evening slot so a date-only edit can't slide a night across
+      // a day boundary in someone else's timezone.
+      await send("PATCH", `/api/nights/${detail.night.id}`, { selector_id: selector, watched_at: new Date(date + "T20:00:00").toISOString() });
+      onClose();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    setBusy(true);
+    setError(null);
+    try {
+      await send("DELETE", `/api/nights/${detail.night.id}`);
+      router.replace("/history");
+    } catch (e) {
+      setError(e);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet open={open} onClose={onClose} title={`Edit ${detail.movie.title}`}>
+      <div className="flex flex-col gap-4">
+        <div>
+          <div className="label mb-1">Who picked it?</div>
+          <div className="grid grid-cols-2 gap-2">
+            {active.map((m) => (
+              <button key={m.id} className={`btn ${selector === m.id ? "btn-gold" : "btn-ghost"} min-h-11 justify-start gap-2 text-sm`} onClick={() => setSelector(m.id)}>
+                <Avatar member={m} size={22} /> {m.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="label mb-1">Date watched</div>
+          <input type="date" className="input" value={date} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setDate(e.target.value)} />
+          <div className="mt-1 text-xs text-muted">Currently {fmtDate(watched)}</div>
+        </div>
+        <ErrorNote error={error} />
+        <button className="btn btn-gold w-full" disabled={busy || !date} onClick={save}>
+          Save changes
+        </button>
+        <div className="border-t border-line pt-3">
+          {confirming ? (
+            <div className="flex flex-col gap-2">
+              <div className="text-sm font-bold text-bad">Remove this movie night for everyone? Its ratings, reviews and snacks go with it.</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button className="btn btn-ghost" disabled={busy} onClick={() => setConfirming(false)}>
+                  Keep it
+                </button>
+                <button className="btn btn-bad" disabled={busy} onClick={remove}>
+                  Yes, remove
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button className="w-full text-center text-xs font-bold text-muted underline" onClick={() => setConfirming(true)}>
+              Remove this listing from history
+            </button>
+          )}
+        </div>
       </div>
     </Sheet>
   );

@@ -292,6 +292,50 @@ export async function withdrawProposal(sql: Sql, nightId: string, memberId: stri
   await refundVotes(sql, nightId);
 }
 
+/**
+ * Fix a history entry: who picked it and when it was watched. Backfilled
+ * nights carry the same timestamp on every lifecycle field, so a corrected
+ * date moves them together; a real night only needs watched/completed moved.
+ */
+export async function updateNight(
+  sql: Sql,
+  memberId: string,
+  nightId: string,
+  changes: { selectorId?: string; watchedAt?: Date },
+): Promise<NightDetail> {
+  await requireMember(sql, memberId);
+  const night = await requireNight(sql, nightId);
+  if (night.status !== "complete") throw new Conflict("Only finished movie nights can be edited");
+  if (changes.selectorId) {
+    const selector = await requireMember(sql, changes.selectorId);
+    await sql`UPDATE movie_nights SET selector_id = ${selector.id} WHERE id = ${nightId}`;
+  }
+  if (changes.watchedAt) {
+    const ts = changes.watchedAt.toISOString();
+    // A backfilled night was created with every stamp equal, so keep them in
+    // step; a night actually played through keeps its real proposal time.
+    const backfilled = night.proposed_at === night.completed_at;
+    if (backfilled) {
+      await sql`UPDATE movie_nights SET proposed_at = ${ts}, approved_at = ${ts}, started_at = ${ts}, watched_at = ${ts}, completed_at = ${ts} WHERE id = ${nightId}`;
+    } else {
+      await sql`UPDATE movie_nights SET watched_at = ${ts}, completed_at = ${ts} WHERE id = ${nightId}`;
+    }
+  }
+  return loadNightDetail(sql, nightId, memberId);
+}
+
+/**
+ * Remove a finished movie night entirely — for a listing added by mistake.
+ * Ratings, reviews, snacks, predictions and votes cascade away with it; coin
+ * ledger rows survive with a null night so nobody's balance shifts.
+ */
+export async function deleteNight(sql: Sql, memberId: string, nightId: string): Promise<void> {
+  await requireMember(sql, memberId);
+  const night = await requireNight(sql, nightId);
+  if (night.status !== "complete") throw new Conflict("Only finished movie nights can be removed");
+  await sql`DELETE FROM movie_nights WHERE id = ${nightId}`;
+}
+
 export async function decideApproval(
   sql: Sql,
   nightId: string,

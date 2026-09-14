@@ -17,6 +17,34 @@ let client: Sql | null = null;
 let override: Sql | null = null;
 
 /**
+ * Postgres drivers hand back `Date` objects for timestamptz and date columns,
+ * but every type in lib/types.ts declares those fields as ISO strings — which
+ * is what they become the moment a row is serialised into an API response.
+ * Server-side code that runs *before* that serialisation (the stats engine,
+ * say) would otherwise see Dates and quietly break on string operations.
+ * Normalising here means there is one shape, everywhere, matching the types.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeRows(rows: Record<string, any>[]): Record<string, any>[] {
+  for (const row of rows) {
+    for (const key in row) {
+      if (row[key] instanceof Date) row[key] = (row[key] as Date).toISOString();
+    }
+  }
+  return rows;
+}
+
+/** Wraps a driver so every row it returns has ISO-string timestamps. */
+function normalized(inner: Sql): Sql {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const query = async (text: string, params?: any[]) => normalizeRows(await inner.query(text, params));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sql = (async (strings: TemplateStringsArray, ...values: any[]) => normalizeRows(await inner(strings, ...values))) as Sql;
+  sql.query = query;
+  return sql;
+}
+
+/**
  * Vercel injects a different variable name depending on how the database was
  * attached — the Neon marketplace integration sets DATABASE_URL, while the
  * older Vercel Postgres path sets POSTGRES_URL. Accept either, and fall back to
@@ -35,7 +63,7 @@ function connect(): Sql {
   if (client) return client;
   const name = URL_VARS.find((key) => process.env[key]);
   if (!name && process.env.MOVIETIME_LOCAL_DB === "pglite") {
-    client = localPglite();
+    client = normalized(localPglite());
     return client;
   }
   if (!name) {
@@ -48,7 +76,7 @@ function connect(): Sql {
         ".",
     );
   }
-  client = neon(process.env[name]!) as unknown as Sql;
+  client = normalized(neon(process.env[name]!) as unknown as Sql);
   return client;
 }
 
@@ -108,7 +136,7 @@ export async function db(): Promise<Sql> {
 
 /** Test hook: point every route at an in-process database. */
 export function setDbForTests(sql: Sql | null) {
-  override = sql;
+  override = sql ? normalized(sql) : null;
   ready = null;
 }
 

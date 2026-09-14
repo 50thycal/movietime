@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import { useApp } from "@/components/Shell";
 import { Avatar, Empty, ErrorNote, Poster, Spinner } from "@/components/ui";
 import { useHistory } from "@/lib/api";
+import { BackfillSheet } from "@/components/sheets";
 import { decadeOf, fmtDate, fmtRuntime, fmtScore, RUNTIME_BUCKETS, runtimeBucket } from "@/lib/format";
 
 const SORTS = [
@@ -27,6 +28,7 @@ export default function HistoryPage() {
   const [decade, setDecade] = useState<string | null>(null);
   const [sort, setSort] = useState<(typeof SORTS)[number]["key"]>("newest");
   const [showFilters, setShowFilters] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const genres = useMemo(() => [...new Set(entries.flatMap((e) => e.movie.genres.map((g) => g.name)))].sort(), [entries]);
@@ -73,10 +75,16 @@ export default function HistoryPage() {
         <h1 className="text-2xl font-black">
           History <span className="text-base text-muted">{entries.length}</span>
         </h1>
-        <button className={`chip ${active ? "chip-on" : ""}`} onClick={() => setShowFilters((s) => !s)}>
-          ⚙︎ Filters{active ? ` · ${active}` : ""}
-        </button>
+        <div className="flex gap-2">
+          <button className="chip" onClick={() => setAdding(true)}>
+            + Past movie
+          </button>
+          <button className={`chip ${active ? "chip-on" : ""}`} onClick={() => setShowFilters((s) => !s)}>
+            ⚙︎ Filters{active ? ` · ${active}` : ""}
+          </button>
+        </div>
       </div>
+      <BackfillSheet open={adding} onClose={() => setAdding(false)} />
 
       <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
         {SORTS.map((s) => (
@@ -134,7 +142,11 @@ export default function HistoryPage() {
       )}
 
       {entries.length === 0 ? (
-        <Empty title="Nothing watched yet" body="Finish your first movie night and it lands here." />
+        <Empty title="Nothing watched yet" body="Finish your first movie night and it lands here. Or add the ones you've already watched.">
+          <button className="btn btn-gold mt-2" onClick={() => setAdding(true)}>
+            + Add a past movie
+          </button>
+        </Empty>
       ) : shown.length === 0 ? (
         <Empty title="No matches" body="Loosen the filters." />
       ) : (

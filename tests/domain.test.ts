@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { fmtRuntime, runtimeBucket, fmtScore, decadeOf } from "../lib/format";
 import { nextAfter, rotationInfo, rotationOrder } from "../lib/rotation";
-import { approvalOutcome, ratingsRevealed, summarizeRatings } from "../lib/scoring";
+import { approvalOutcome, ratingsRevealed, summarizeRatings, voteOutcome } from "../lib/scoring";
 import { filterCandidates, pickRandom } from "../lib/roulette";
 import { normalizeMovie } from "../lib/tmdb";
 import {
@@ -341,4 +341,14 @@ test("tmdb normalisation", () => {
   assert.equal(m.tmdb_rating, 7.5);
   const lookup = new Map([[28, "Action"]]);
   assert.deepEqual(normalizeMovie({ id: 6, title: "Y", genre_ids: [28, 99] }, lookup).genres, [{ id: 28, name: "Action" }]);
+});
+
+test("vote outcome: majority, picker breaks ties, waits for everyone", () => {
+  const ids = ["a", "b", "c", "d"];
+  const v = (m: string, movie: string) => ({ member_id: m, movie_id: movie });
+  assert.equal(voteOutcome([v("a", "x"), v("b", "x"), v("c", "y")], ["x", "y"], "a", ids), null);
+  assert.equal(voteOutcome([v("a", "x"), v("b", "x"), v("c", "y"), v("d", "y")], ["x", "y"], "d", ids), "y");
+  assert.equal(voteOutcome([v("a", "x"), v("b", "y"), v("c", "y"), v("d", "z")], ["x", "y", "z"], "a", ids), "y");
+  // Full three-way tie with picker on z → z.
+  assert.equal(voteOutcome([v("a", "z"), v("b", "y"), v("c", "x")], ["x", "y", "z"], "a", ["a", "b", "c"]), "z");
 });

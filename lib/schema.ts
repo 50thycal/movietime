@@ -125,4 +125,24 @@ export const SCHEMA_STATEMENTS: string[] = [
      updated_at  timestamptz NOT NULL DEFAULT now(),
      UNIQUE (night_id, member_id)
    )`,
+
+  // A proposal may carry up to three candidate films. With one candidate the
+  // group approves or rejects; with more, everyone votes and the winner
+  // becomes movie_nights.movie_id.
+  `CREATE TABLE IF NOT EXISTS night_candidates (
+     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+     night_id   uuid        NOT NULL REFERENCES movie_nights(id) ON DELETE CASCADE,
+     movie_id   uuid        NOT NULL REFERENCES movies(id),
+     position   integer     NOT NULL,
+     UNIQUE (night_id, movie_id)
+   )`,
+
+  `CREATE TABLE IF NOT EXISTS night_votes (
+     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+     night_id   uuid        NOT NULL REFERENCES movie_nights(id) ON DELETE CASCADE,
+     member_id  uuid        NOT NULL REFERENCES members(id),
+     movie_id   uuid        NOT NULL REFERENCES movies(id),
+     created_at timestamptz NOT NULL DEFAULT now(),
+     UNIQUE (night_id, member_id)
+   )`,
 ];

@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { send } from "@/lib/api";
 import { useApp } from "@/components/Shell";
 import { ErrorNote } from "@/components/ui";
@@ -14,10 +14,11 @@ export default function SetupPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  if (state?.setup_complete) {
-    router.replace("/");
-    return null;
-  }
+  // Already set up (someone else beat this phone to it) → straight to Tonight.
+  useEffect(() => {
+    if (state?.setup_complete) router.replace("/");
+  }, [state?.setup_complete, router]);
+  if (state?.setup_complete) return null;
 
   const filled = names.map((n) => n.trim()).filter(Boolean);
 

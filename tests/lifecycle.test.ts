@@ -151,3 +151,60 @@ test("manual rotation override", async () => {
   await s.setRotation(sql, jo.id);
   assert.equal(await s.currentSelectorId(sql), jo.id);
 });
+
+test("shortlist vote picks the winner once everyone has voted", async () => {
+  const sql = await db();
+  const members = await s.loadMembers(sql);
+  const jo = members.find((m) => m.name === "Jo")!;
+  const calvin = members.find((m) => m.name === "Calvin")!;
+  const molly = members.find((m) => m.name === "Molly")!;
+  const sam = members.find((m) => m.name === "Sam")!;
+  await s.setRotation(sql, jo.id);
+  await assert.rejects(s.proposeMovies(sql, jo.id, []), /at least one/);
+  let night = await s.proposeMovies(sql, jo.id, [
+    MOVIE({ tmdb_id: 11, title: "A" }),
+    MOVIE({ tmdb_id: 12, title: "B" }),
+    MOVIE({ tmdb_id: 13, title: "C" }),
+  ]);
+  assert.equal(night.candidates.length, 3);
+  assert.deepEqual(night.candidates.map((c) => c.title), ["A", "B", "C"]);
+  const [a, b] = night.candidates;
+  // Approve/reject is not how a vote resolves.
+  await assert.rejects(s.decideApproval(sql, night.night.id, calvin.id, "approve", null), /vote/);
+  await assert.rejects(s.castVote(sql, night.night.id, calvin.id, night.movie.id + "x"), /shortlist|invalid/i);
+  night = await s.castVote(sql, night.night.id, calvin.id, a.id);
+  night = await s.castVote(sql, night.night.id, molly.id, b.id);
+  night = await s.castVote(sql, night.night.id, sam.id, b.id);
+  assert.equal(night.night.status, "proposed");
+  // Changing a vote replaces it.
+  night = await s.castVote(sql, night.night.id, sam.id, a.id);
+  assert.equal(night.votes.length, 3);
+  // Picker votes last and breaks the 2–2 tie in favour of B.
+  night = await s.castVote(sql, night.night.id, jo.id, b.id);
+  assert.equal(night.night.status, "approved");
+  assert.equal(night.movie.title, "B");
+  await s.withdrawProposal(sql, night.night.id, jo.id);
+});
+
+test("backfilled movies land in history without touching the rotation", async () => {
+  const sql = await db();
+  const members = await s.loadMembers(sql);
+  const calvin = members.find((m) => m.name === "Calvin")!;
+  const molly = members.find((m) => m.name === "Molly")!;
+  const before = await s.currentSelectorId(sql);
+  const night = await s.backfillNight(sql, molly.id, MOVIE({ tmdb_id: 77, title: "Old One" }), calvin.id, new Date("2024-03-01T20:00:00Z"), [
+    { member_id: calvin.id, score: 8 },
+    { member_id: molly.id, score: 7 },
+  ]);
+  assert.equal(night.night.status, "complete");
+  assert.equal(night.ratings.length, 2);
+  assert.equal(await s.currentSelectorId(sql), before);
+  assert.equal((await s.loadHomeState(sql, null)).current, null);
+  // A member who wasn't entered can add their own score later, once.
+  const sam = members.find((m) => m.name === "Sam")!;
+  const after = await s.submitRating(sql, night.night.id, sam.id, 6.5);
+  assert.equal(after.ratings.length, 3);
+  await assert.rejects(s.submitRating(sql, night.night.id, sam.id, 5), /already/);
+  const history = await s.loadHistory(sql);
+  assert.ok(history.some((h) => h.movie.title === "Old One" && h.night.completed_at && new Date(h.night.completed_at).getFullYear() === 2024));
+});

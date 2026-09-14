@@ -4,14 +4,14 @@ import Link from "next/link";
 import { useState } from "react";
 import { ApprovalRow, MovieHeader, STATUS_LABEL } from "@/components/NightCard";
 import { useApp } from "@/components/Shell";
-import { PickSheet, PredictSheet, RateSheet, RejectSheet } from "@/components/sheets";
+import { ChangePickerSheet, PickSheet, PredictSheet, RateSheet, RejectSheet } from "@/components/sheets";
 import { Avatar, ErrorNote, Poster } from "@/components/ui";
 import { send } from "@/lib/api";
-import { fmtScore } from "@/lib/format";
+import { fmtRuntime, fmtScore } from "@/lib/format";
 import { summarizeRatings } from "@/lib/scoring";
 import type { NightDetail } from "@/lib/types";
 
-type Open = "pick" | "rate" | "predict" | "reject" | null;
+type Open = "pick" | "rate" | "predict" | "reject" | "picker" | null;
 
 export default function Tonight() {
   const { state, me, members } = useApp();
@@ -39,15 +39,29 @@ export default function Tonight() {
   return (
     <div className="flex flex-col gap-4 pt-1">
       {/* 1. Whose turn */}
-      <section className="card relative overflow-hidden p-5" style={{ borderColor: turn?.color }}>
+      <section
+        className="card relative overflow-hidden p-5 text-left"
+        style={{ borderColor: turn?.color }}
+        role={current ? undefined : "button"}
+        onClick={() => !current && setOpen("picker")}
+      >
         <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full opacity-25 blur-2xl" style={{ background: turn?.color }} />
-        <div className="label">{current ? "Tonight's picker" : "Up next"}</div>
+        <div className="flex items-center justify-between">
+          <div className="label">{current ? "Tonight's picker" : "Up next"}</div>
+          {!current && <span className="chip">change</span>}
+        </div>
         <div className="mt-1 flex items-center gap-4">
           <Avatar member={turn} size={64} ring />
           <div>
             <div className="text-3xl font-black leading-none">{turn?.name ?? "Nobody"}</div>
             <div className="mt-1 text-sm text-muted">
-              {current ? STATUS_LABEL[current.night.status] : myTurn ? "It's your pick!" : `${turn?.name} is choosing`}
+              {current
+                ? current.night.status === "proposed" && current.candidates.length > 1
+                  ? "Vote in progress"
+                  : STATUS_LABEL[current.night.status]
+                : myTurn
+                  ? "It's your pick!"
+                  : `${turn?.name} is choosing`}
             </div>
           </div>
         </div>
@@ -56,8 +70,14 @@ export default function Tonight() {
       {/* 2. Current movie + 3. primary action */}
       {current ? (
         <section className="card flex flex-col gap-4 p-4">
-          <MovieHeader detail={current} members={members} />
-          {current.night.status === "proposed" && <ApprovalRow detail={current} members={members} />}
+          {current.night.status === "proposed" && current.candidates.length > 1 ? (
+            <VoteBoard detail={current} meId={me.id} busy={busy} act={act} />
+          ) : (
+            <>
+              <MovieHeader detail={current} members={members} />
+              {current.night.status === "proposed" && <ApprovalRow detail={current} members={members} />}
+            </>
+          )}
           <PrimaryAction detail={current} meId={me.id} busy={busy} setOpen={setOpen} act={act} />
           <ErrorNote error={error} />
         </section>
@@ -111,6 +131,7 @@ export default function Tonight() {
       )}
 
       <PickSheet open={open === "pick"} onClose={() => setOpen(null)} />
+      <ChangePickerSheet open={open === "picker"} onClose={() => setOpen(null)} />
       {current && <RateSheet night={current} open={open === "rate"} onClose={() => setOpen(null)} />}
       {current && <PredictSheet key={current.my_prediction?.updated_at ?? "p"} night={current} open={open === "predict"} onClose={() => setOpen(null)} />}
       {current && <RejectSheet night={current} open={open === "reject"} onClose={() => setOpen(null)} />}
@@ -137,6 +158,20 @@ function PrimaryAction({
   const isSelector = night.selector_id === meId;
   const activeIds = members.filter((m) => m.active).map((m) => m.id);
 
+  if (night.status === "proposed" && detail.candidates.length > 1) {
+    const voted = detail.votes.some((v) => v.member_id === meId);
+    const left = activeIds.filter((x) => !detail.votes.some((v) => v.member_id === x)).length;
+    return (
+      <div className="flex flex-col gap-2">
+        <div className="btn btn-ghost w-full cursor-default">{voted ? `🗳 Vote cast · waiting on ${left}` : "🗳 Tap a movie above to vote"}</div>
+        {isSelector && (
+          <button className="text-center text-xs font-bold text-muted underline" disabled={busy} onClick={() => act(() => send("DELETE", `/api/nights/${id}`))}>
+            Withdraw the shortlist
+          </button>
+        )}
+      </div>
+    );
+  }
   if (night.status === "proposed") {
     if (isSelector) {
       const waiting = activeIds.filter((x) => x !== meId && !detail.approvals.some((a) => a.member_id === x)).length;
@@ -208,6 +243,48 @@ function PrimaryAction({
     );
   }
   return null;
+}
+
+function VoteBoard({ detail, meId, busy, act }: { detail: NightDetail; meId: string; busy: boolean; act: (fn: () => Promise<unknown>) => Promise<void> }) {
+  const { members } = useApp();
+  const mine = detail.votes.find((v) => v.member_id === meId)?.movie_id ?? null;
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <div className="label">{detail.selector.name}&apos;s shortlist · vote for one</div>
+        <span className="text-xs text-muted">{detail.votes.length}/{members.filter((m) => m.active).length} voted</span>
+      </div>
+      {detail.candidates.map((c) => {
+        const voters = detail.votes.filter((v) => v.movie_id === c.id).map((v) => members.find((m) => m.id === v.member_id));
+        const on = mine === c.id;
+        return (
+          <button
+            key={c.id}
+            disabled={busy}
+            onClick={() => act(() => send("POST", `/api/nights/${detail.night.id}/vote`, { movie_id: c.id }))}
+            className={`flex items-center gap-3 rounded-2xl border p-2 text-left transition active:scale-[0.99] ${on ? "border-gold bg-gold/10" : "border-line bg-bg-2"}`}
+          >
+            <Poster path={c.poster_path} title={c.title} className="w-14 shrink-0" size="w185" />
+            <div className="min-w-0 flex-1">
+              <div className="font-black leading-tight">
+                {c.title} {c.year && <span className="font-bold text-muted">({c.year})</span>}
+              </div>
+              <div className="text-xs text-gold">⏱ {fmtRuntime(c.runtime_min)}</div>
+              <div className="truncate text-xs text-muted">{c.genres.map((g) => g.name).join(" · ")}</div>
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <div className="text-xl font-black">{voters.length}</div>
+              <div className="flex -space-x-1">
+                {voters.map((m) => (
+                  <Avatar key={m?.id} member={m} size={18} />
+                ))}
+              </div>
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function RecentCard({ detail }: { detail: NightDetail }) {

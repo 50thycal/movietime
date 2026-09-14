@@ -70,6 +70,14 @@ export interface Approval {
   created_at: string;
 }
 
+export interface FirstImpression {
+  id: string;
+  night_id: string;
+  member_id: string;
+  score: number;
+  created_at: string;
+}
+
 export interface Rating {
   id: string;
   night_id: string;
@@ -137,7 +145,7 @@ export interface CycleInfo {
   first_member_id: string | null;
 }
 
-export type TodoKind = "backfill" | "rate_missing" | "approve" | "vote" | "rate_now" | "predict";
+export type TodoKind = "backfill" | "rate_missing" | "approve" | "vote" | "rate_now" | "predict" | "impression";
 
 export interface Todo {
   key: string;
@@ -170,6 +178,11 @@ export interface NightDetail {
   predictions: Prediction[];
   /** The requester's own prediction — predictions of others are hidden until reveal. */
   my_prediction: Prediction | null;
+  /** Ten-minute verdicts — only once the night is complete. */
+  first_impressions: FirstImpression[];
+  /** Who has given one so far, visible while the scores are still hidden. */
+  impressed_member_ids: string[];
+  my_first_impression: number | null;
   /** Awards earned, computed from recorded data. Empty until complete. */
   awards: { key: string; night_id: string; member_id: string | null; detail: string }[];
 }

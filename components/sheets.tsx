@@ -486,3 +486,33 @@ export function EditNightSheet({ detail, open, onClose }: { detail: NightDetail;
     </Sheet>
   );
 }
+
+/** The ten-minute verdict, taken while the movie is still running. */
+export function ImpressionSheet({ night, open, onClose }: { night: NightDetail; open: boolean; onClose: () => void }) {
+  const [score, setScore] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  async function submit() {
+    if (score == null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await send("POST", `/api/nights/${night.night.id}/impressions`, { score });
+      onClose();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Sheet open={open} onClose={onClose} title="Ten minutes in — what's the verdict?">
+      <p className="mb-3 text-sm text-muted">Gut call, no deliberating. It stays hidden until everyone has rated the film at the end, then we see who called it.</p>
+      <ScorePicker value={score} onChange={setScore} />
+      <ErrorNote error={error} />
+      <button className="btn btn-gold mt-4 w-full" disabled={score == null || busy} onClick={submit}>
+        {score == null ? "Pick a score" : `Lock in ${score}`}
+      </button>
+    </Sheet>
+  );
+}

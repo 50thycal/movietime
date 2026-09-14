@@ -181,4 +181,16 @@ export const SCHEMA_STATEMENTS: string[] = [
      done_at   timestamptz NOT NULL DEFAULT now(),
      PRIMARY KEY (member_id, task_key)
    )`,
+
+  // The ten-minute verdict: a snap score taken while the movie is still
+  // playing, so it can be compared with what everyone thought at the end.
+  // One per person per night, locked once given, hidden until the reveal.
+  `CREATE TABLE IF NOT EXISTS first_impressions (
+     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+     night_id   uuid        NOT NULL REFERENCES movie_nights(id) ON DELETE CASCADE,
+     member_id  uuid        NOT NULL REFERENCES members(id),
+     score      real        NOT NULL CHECK (score >= 1 AND score <= 10 AND score * 2 = floor(score * 2)),
+     created_at timestamptz NOT NULL DEFAULT now(),
+     UNIQUE (night_id, member_id)
+   )`,
 ];

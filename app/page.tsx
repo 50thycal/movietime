@@ -6,14 +6,15 @@ import { useSearchParams } from "next/navigation";
 import { useWishlist } from "@/lib/api";
 import { ApprovalRow, MovieHeader, STATUS_LABEL } from "@/components/NightCard";
 import { useApp } from "@/components/Shell";
-import { ChangePickerSheet, PickSheet, PredictSheet, RateSheet, RejectSheet } from "@/components/sheets";
+import { ChangePickerSheet, ImpressionSheet, PickSheet, PredictSheet, RateSheet, RejectSheet } from "@/components/sheets";
 import { Avatar, ErrorNote, Poster } from "@/components/ui";
 import { send } from "@/lib/api";
 import { fmtRuntime, fmtScore } from "@/lib/format";
+import { FIRST_IMPRESSION_MINUTES } from "@/lib/constants";
 import { summarizeRatings } from "@/lib/scoring";
 import type { NightDetail, Todo } from "@/lib/types";
 
-type Open = "pick" | "rate" | "predict" | "reject" | "picker" | null;
+type Open = "pick" | "rate" | "predict" | "reject" | "picker" | "impression" | null;
 
 export default function Tonight() {
   return (
@@ -158,6 +159,7 @@ function TonightInner() {
 
       <PickSheet open={open === "pick"} onClose={() => setOpen(null)} />
       <ChangePickerSheet open={open === "picker"} onClose={() => setOpen(null)} />
+      {current && <ImpressionSheet night={current} open={open === "impression"} onClose={() => setOpen(null)} />}
       {current && <RateSheet night={current} open={open === "rate"} onClose={() => setOpen(null)} />}
       {current && <PredictSheet key={current.my_prediction?.updated_at ?? "p"} night={current} open={open === "predict"} onClose={() => setOpen(null)} />}
       {current && <RejectSheet night={current} open={open === "reject"} onClose={() => setOpen(null)} />}
@@ -239,9 +241,12 @@ function PrimaryAction({
   }
   if (night.status === "watching") {
     return (
-      <button className="btn btn-gold w-full text-lg" disabled={busy} onClick={() => act(() => send("POST", `/api/nights/${id}/finish`))}>
-        🍿 Movie&apos;s over → Rate it
-      </button>
+      <div className="flex flex-col gap-2">
+        <TenMinuteVerdict detail={detail} onOpen={() => setOpen("impression")} />
+        <button className="btn btn-gold w-full text-lg" disabled={busy} onClick={() => act(() => send("POST", `/api/nights/${id}/finish`))}>
+          🍿 Movie&apos;s over → Rate it
+        </button>
+      </div>
     );
   }
   if (night.status === "rating") {
@@ -351,10 +356,65 @@ function VoteBoard({ detail, meId, busy, act }: { detail: NightDetail; meId: str
   );
 }
 
+/**
+ * While the film plays: a countdown to the ten-minute mark, then the prompt.
+ * The clock runs off the server-recorded start time, so every phone agrees.
+ */
+function TenMinuteVerdict({ detail, onOpen }: { detail: NightDetail; onOpen: () => void }) {
+  const { members } = useApp();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const started = detail.night.started_at ? new Date(detail.night.started_at).getTime() : null;
+  const openAt = started == null ? null : started + FIRST_IMPRESSION_MINUTES * 60_000;
+  const remaining = openAt == null ? 0 : Math.max(0, openAt - now);
+  const mine = detail.my_first_impression;
+  const given = detail.impressed_member_ids;
+  const active = members.filter((m) => m.active);
+
+  if (mine != null) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl bg-bg-2 px-3 py-2">
+        <span className="text-lg">🔒</span>
+        <span className="flex-1 text-sm font-bold">
+          Your ten-minute verdict: <span className="text-gold">{fmtScore(mine)}</span>
+        </span>
+        <div className="flex -space-x-1">
+          {active.map((m) => (
+            <div key={m.id} className={given.includes(m.id) ? "" : "opacity-30 grayscale"}>
+              <Avatar member={m} size={20} />
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  if (remaining > 0) {
+    const mm = Math.floor(remaining / 60_000);
+    const ss = Math.floor((remaining % 60_000) / 1000);
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-dashed border-line px-3 py-2 text-sm text-muted">
+        <span className="text-lg">⏱</span>
+        First impressions open in{" "}
+        <b className="text-ink tabular-nums">
+          {mm}:{String(ss).padStart(2, "0")}
+        </b>
+      </div>
+    );
+  }
+  return (
+    <button className="btn btn-ghost w-full" onClick={onOpen}>
+      ⏱ Ten-minute verdict{given.length ? ` · ${given.length}/${active.length} in` : ""}
+    </button>
+  );
+}
+
 function TodoCard({ todos }: { todos: Todo[] }) {
   const [openList, setOpenList] = useState(true);
   const [busy, setBusy] = useState(false);
-  const icon: Record<Todo["kind"], string> = { backfill: "🕰️", rate_missing: "⭐", approve: "✓", vote: "🗳", rate_now: "⭐", predict: "🎯" };
+  const icon: Record<Todo["kind"], string> = { backfill: "🕰️", rate_missing: "⭐", approve: "✓", vote: "🗳", rate_now: "⭐", predict: "🎯", impression: "⏱" };
   return (
     <section className="card p-4">
       <button className="flex w-full items-center justify-between" onClick={() => setOpenList((o) => !o)}>

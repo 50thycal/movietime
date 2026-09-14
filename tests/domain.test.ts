@@ -8,6 +8,7 @@ import { normalizeMovie } from "../lib/tmdb";
 import {
   awardTotals,
   criticStats,
+  firstImpressionStats,
   leaderboards,
   memberGenreStats,
   nightAwards,
@@ -74,6 +75,7 @@ function night(
     },
     ratings: Object.entries(scores).map(([m, score], i) => ({ id: `${id}r${i}`, night_id: id, member_id: m, score, created_at: "" })),
     predictions: [],
+    first_impressions: [],
     snacks: [],
     snack_ratings: [],
     ...extra,
@@ -362,4 +364,62 @@ test("vote outcome is weighted by coins, coinless votes still count as one", () 
   assert.equal(voteOutcome([v("a", "x", 0), v("b", "x", 0), v("c", "y", 1), v("d", "z", 0)], ["x", "y", "z"], "c", ids), "x");
   // Equal stakes → picker's choice.
   assert.equal(voteOutcome([v("a", "x", 5), v("b", "y", 5), v("c", "x", 5), v("d", "y", 5)], ["x", "y"], "b", ids), "y");
+});
+
+test("first impressions: correlation, drift and movers", () => {
+  const fi = (nightId: string, member: string, score: number) => ({ id: `${nightId}${member}f`, night_id: nightId, member_id: member, score, created_at: "" });
+  // Four films where the ten-minute verdict tracks the final score closely.
+  const mk = (scores: Record<string, number>, firsts: Record<string, number>, over = {}) =>
+    night("a", scores, over, { first_impressions: Object.entries(firsts).map(([m, v], i) => fi(`n${i}`, m, v)) });
+  const data: Dataset = {
+    members: MEMBERS,
+    nights: [
+      mk({ a: 9, b: 8 }, { a: 8.5, b: 7.5 }),
+      mk({ a: 4, b: 5 }, { a: 4.5, b: 5 }),
+      mk({ a: 7, b: 6 }, { a: 6.5, b: 6 }),
+    ],
+  };
+  const s = firstImpressionStats(data);
+  assert.equal(s.pairs, 6);
+  assert.equal(s.nights, 3);
+  assert.ok(s.correlation !== null && s.correlation > 0.9, `expected strong correlation, got ${s.correlation}`);
+  assert.equal(s.mean_abs_change, 0.3);
+  // Every film here ended up rated at or above the snap verdict.
+  assert.ok(s.mean_drift !== null && s.mean_drift > 0);
+  assert.equal(s.within_half_point, 100);
+  assert.equal(s.per_member.find((p) => p.member_id === "a")!.pairs, 3);
+  assert.equal(s.per_member.find((p) => p.member_id === "c")!.pairs, 0);
+  assert.ok(s.sharpest);
+  assert.ok(s.biggest_riser);
+
+  // A film the room turned on: snap 9s, final 4s.
+  const sour: Dataset = { members: MEMBERS, nights: [mk({ a: 4, b: 4 }, { a: 9, b: 9 }, { title: "Fell Apart" })] };
+  const s2 = firstImpressionStats(sour);
+  assert.equal(s2.mean_drift, -5);
+  assert.equal(s2.biggest_faller?.first, 9);
+  assert.equal(s2.biggest_faller?.final, 4);
+  assert.equal(s2.biggest_riser, null);
+  assert.equal(s2.within_half_point, 0);
+
+  // Too little data makes no claim.
+  const thin: Dataset = { members: MEMBERS, nights: [mk({ a: 7 }, { a: 7 })] };
+  assert.equal(firstImpressionStats(thin).correlation, null);
+  assert.equal(firstImpressionStats({ members: MEMBERS, nights: [] }).pairs, 0);
+  assert.equal(firstImpressionStats({ members: MEMBERS, nights: [] }).mean_drift, null);
+});
+
+test("crystal ball award goes to the closest snap verdict, when there is a clear winner", () => {
+  const fi = (member: string, score: number) => ({ id: `${member}f`, night_id: "n", member_id: member, score, created_at: "" });
+  const n = night("a", { a: 8, b: 6, c: 7 }, {}, { first_impressions: [fi("a", 8), fi("b", 3), fi("c", 5)] });
+  const data: Dataset = { members: MEMBERS, nights: [n] };
+  const award = nightAwards(n, data).find((x) => x.key === "crystal_ball");
+  assert.equal(award?.member_id, "a");
+  assert.match(award!.detail, /never moved/);
+
+  // A tie awards nobody.
+  const tied = night("a", { a: 8, b: 6 }, {}, { first_impressions: [fi("a", 7), fi("b", 5)] });
+  assert.equal(nightAwards(tied, { members: MEMBERS, nights: [tied] }).some((x) => x.key === "crystal_ball"), false);
+  // One lone impression isn't a contest.
+  const lone = night("a", { a: 8, b: 6 }, {}, { first_impressions: [fi("a", 8)] });
+  assert.equal(nightAwards(lone, { members: MEMBERS, nights: [lone] }).some((x) => x.key === "crystal_ball"), false);
 });

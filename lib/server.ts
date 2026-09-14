@@ -27,6 +27,7 @@ import type {
   Budget,
   CycleInfo,
   Todo,
+  FirstImpression,
 } from "./types";
 import { ACTIVE_STATUSES } from "./types";
 import { mean, round1 } from "./scoring";
@@ -121,7 +122,7 @@ export async function requireNight(sql: Sql, nightId: string): Promise<MovieNigh
 
 export async function loadNightDetail(sql: Sql, nightId: string, me: string | null): Promise<NightDetail> {
   const night = await requireNight(sql, nightId);
-  const [movies, selectors, approvals, ratings, reviews, snacks, snackRatings, predictions, members, candidates, votes] = await Promise.all([
+  const [movies, selectors, approvals, ratings, reviews, snacks, snackRatings, predictions, members, candidates, votes, impressions] = await Promise.all([
     sql`SELECT * FROM movies WHERE id = ${night.movie_id}`,
     sql`SELECT * FROM members WHERE id = ${night.selector_id}`,
     sql`SELECT * FROM movie_approvals WHERE night_id = ${nightId} ORDER BY created_at`,
@@ -133,6 +134,7 @@ export async function loadNightDetail(sql: Sql, nightId: string, me: string | nu
     loadMembers(sql),
     sql`SELECT m.* FROM night_candidates c JOIN movies m ON m.id = c.movie_id WHERE c.night_id = ${nightId} ORDER BY c.position`,
     sql`SELECT * FROM night_votes WHERE night_id = ${nightId} ORDER BY created_at`,
+    sql`SELECT * FROM first_impressions WHERE night_id = ${nightId} ORDER BY created_at`,
   ]);
   const allRatings = ratings as Rating[];
   const revealed = night.status === "complete" || ratingsRevealed(allRatings.map((r) => r.member_id), members.filter((m) => m.active).map((m) => m.id));
@@ -159,6 +161,9 @@ export async function loadNightDetail(sql: Sql, nightId: string, me: string | nu
     snack_ratings: snackRatings as SnackRating[],
     predictions: revealed ? allPredictions : [],
     my_prediction: me ? (allPredictions.find((p) => p.member_id === me) ?? null) : null,
+    first_impressions: revealed ? (impressions as FirstImpression[]) : [],
+    impressed_member_ids: (impressions as FirstImpression[]).map((i) => i.member_id),
+    my_first_impression: me ? ((impressions as FirstImpression[]).find((i) => i.member_id === me)?.score ?? null) : null,
   };
 }
 
@@ -510,6 +515,8 @@ export async function loadTodos(sql: Sql, memberId: string, current: NightDetail
       todos.push({ key: `vote:${n.id}`, kind: "vote", title: `Vote on ${current.selector.name}'s shortlist`, href: "/", night_id: n.id });
     } else if (n.status === "proposed" && current.candidates.length <= 1 && !isSelector && !current.approvals.some((a) => a.member_id === memberId)) {
       todos.push({ key: `approve:${n.id}`, kind: "approve", title: `Approve or reject ${current.movie.title}`, href: "/", night_id: n.id });
+    } else if (n.status === "watching" && !current.impressed_member_ids.includes(memberId)) {
+      todos.push({ key: `impression:${n.id}`, kind: "impression", title: `Ten-minute verdict on ${current.movie.title}`, href: "/", night_id: n.id });
     } else if (n.status === "rating" && !current.rated_member_ids.includes(memberId)) {
       todos.push({ key: `rate:${n.id}`, kind: "rate_now", title: `Rate ${current.movie.title}`, href: "/", night_id: n.id });
     }
@@ -623,6 +630,24 @@ export async function rateSnack(sql: Sql, snackId: string, memberId: string, sco
   return rows[0];
 }
 
+/**
+ * The ten-minute verdict. Only while the movie is actually playing — once it
+ * has finished there is nothing snap about it — and one shot each, like the
+ * final rating, so the comparison means something.
+ */
+export async function submitFirstImpression(sql: Sql, nightId: string, memberId: string, score: number): Promise<NightDetail> {
+  const night = await requireNight(sql, nightId);
+  await requireMember(sql, memberId);
+  if (night.status !== "watching") {
+    const notYet = night.status === "proposed" || night.status === "approved";
+    throw new Conflict(notYet ? "The movie hasn't started yet" : "Too late — the movie is over");
+  }
+  const existing = await sql`SELECT id FROM first_impressions WHERE night_id = ${nightId} AND member_id = ${memberId}`;
+  if (existing.length) throw new Conflict("You've already given your first impression");
+  await sql`INSERT INTO first_impressions (night_id, member_id, score) VALUES (${nightId}, ${memberId}, ${score})`;
+  return loadNightDetail(sql, nightId, memberId);
+}
+
 export async function submitPrediction(sql: Sql, nightId: string, memberId: string, own: number, group: number | null): Promise<Prediction> {
   const night = await requireNight(sql, nightId);
   await requireMember(sql, memberId);
@@ -659,12 +684,13 @@ export async function loadDataset(sql: Sql): Promise<Dataset> {
   const members = await loadMembers(sql);
   const nights = (await sql`SELECT * FROM movie_nights WHERE status = 'complete' ORDER BY completed_at`) as MovieNight[];
   if (!nights.length) return { members, nights: [] };
-  const [movies, ratings, predictions, snacks, snackRatings] = await Promise.all([
+  const [movies, ratings, predictions, snacks, snackRatings, impressions] = await Promise.all([
     sql`SELECT * FROM movies WHERE id IN (SELECT movie_id FROM movie_nights WHERE status = 'complete')`,
     sql`SELECT r.* FROM ratings r JOIN movie_nights n ON n.id = r.night_id WHERE n.status = 'complete'`,
     sql`SELECT p.* FROM predictions p JOIN movie_nights n ON n.id = p.night_id WHERE n.status = 'complete'`,
     sql`SELECT s.* FROM snack_items s JOIN movie_nights n ON n.id = s.night_id WHERE n.status = 'complete'`,
     sql`SELECT sr.* FROM snack_ratings sr JOIN snack_items s ON s.id = sr.snack_item_id JOIN movie_nights n ON n.id = s.night_id WHERE n.status = 'complete'`,
+    sql`SELECT f.* FROM first_impressions f JOIN movie_nights n ON n.id = f.night_id WHERE n.status = 'complete'`,
   ]);
   const movieById = new Map((movies as Movie[]).map((m) => [m.id, m]));
   const data: NightData[] = nights.map((night) => {
@@ -675,6 +701,7 @@ export async function loadDataset(sql: Sql): Promise<Dataset> {
       movie: movieById.get(night.movie_id)!,
       ratings: (ratings as Rating[]).filter((r) => r.night_id === night.id),
       predictions: (predictions as Prediction[]).filter((p) => p.night_id === night.id),
+      first_impressions: (impressions as FirstImpression[]).filter((f) => f.night_id === night.id),
       snacks: mySnacks,
       snack_ratings: (snackRatings as SnackRating[]).filter((r) => snackIds.has(r.snack_item_id)),
     };

@@ -5,6 +5,7 @@ import { send } from "@/lib/api";
 import { fmtRelative, fmtScore } from "@/lib/format";
 import { summarizeRatings } from "@/lib/scoring";
 import { AWARD_META, predictionResults, type AwardKey } from "@/lib/stats";
+import { mean, round1 } from "@/lib/scoring";
 import type { Member, NightDetail, SnackKind } from "@/lib/types";
 import { useApp } from "./Shell";
 import { Avatar, ErrorNote, ScorePicker, Stars } from "./ui";
@@ -90,7 +91,7 @@ export function Awards({ detail }: { detail: NightDetail }) {
 export function Predictions({ detail }: { detail: NightDetail }) {
   const { members } = useApp();
   if (detail.night.status !== "complete" || !detail.predictions.length) return null;
-  const results = predictionResults({ night: detail.night, movie: detail.movie, ratings: detail.ratings, predictions: detail.predictions, snacks: [], snack_ratings: [] });
+  const results = predictionResults({ night: detail.night, movie: detail.movie, ratings: detail.ratings, predictions: detail.predictions, first_impressions: detail.first_impressions, snacks: [], snack_ratings: [] });
   const groupAvg = summarizeRatings(detail.ratings, detail.night.selector_id).average;
   return (
     <section className="card p-4">
@@ -118,6 +119,62 @@ export function Predictions({ detail }: { detail: NightDetail }) {
             );
           })}
       </div>
+    </section>
+  );
+}
+
+/** Ten minutes in versus the final word, once the scores are out. */
+export function FirstImpressions({ detail }: { detail: NightDetail }) {
+  const { members } = useApp();
+  if (detail.night.status !== "complete" || !detail.first_impressions.length) return null;
+  const rows = detail.first_impressions
+    .map((f) => ({ f, final: detail.ratings.find((r) => r.member_id === f.member_id)?.score ?? null }))
+    .filter((x) => x.final != null)
+    .map((x) => ({ member_id: x.f.member_id, first: x.f.score, final: x.final as number, delta: round1((x.final as number) - x.f.score)! }))
+    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  if (!rows.length) return null;
+  const groupFirst = round1(mean(rows.map((r) => r.first)));
+  const groupFinal = round1(mean(rows.map((r) => r.final)));
+  const drift = groupFirst != null && groupFinal != null ? round1(groupFinal - groupFirst) : null;
+  return (
+    <section className="card flex flex-col gap-3 p-4">
+      <div className="flex items-baseline justify-between">
+        <div className="label">Ten minutes in → final</div>
+        {drift != null && (
+          <div className="text-xs font-bold">
+            <span className="text-muted">{fmtScore(groupFirst)}</span> → <span className="text-gold">{fmtScore(groupFinal)}</span>{" "}
+            <span className={drift > 0 ? "text-good" : drift < 0 ? "text-bad" : "text-muted"}>
+              {drift > 0 ? "+" : ""}
+              {fmtScore(drift)}
+            </span>
+          </div>
+        )}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {rows.map((r) => {
+          const m = members.find((x) => x.id === r.member_id);
+          return (
+            <div key={r.member_id} className="flex items-center gap-2 text-sm">
+              <Avatar member={m} size={22} />
+              <span className="w-16 truncate font-bold">{m?.name}</span>
+              <span className="text-muted">{fmtScore(r.first)}</span>
+              <span className="text-muted">→</span>
+              <span className="font-black">{fmtScore(r.final)}</span>
+              <span className={`ml-auto font-black ${r.delta > 0 ? "text-good" : r.delta < 0 ? "text-bad" : "text-muted"}`}>
+                {r.delta > 0 ? "+" : ""}
+                {fmtScore(r.delta)}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[11px] text-muted">
+        {drift != null && drift > 0.5
+          ? "It won the room over."
+          : drift != null && drift < -0.5
+            ? "It lost the room."
+            : "The room had it pegged from the start."}
+      </p>
     </section>
   );
 }

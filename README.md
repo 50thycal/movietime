@@ -97,6 +97,14 @@ proposed ──(everyone else approves)──▶ approved ──(Start)──▶
   one; when all votes are in, the most-voted film wins, and the picker's vote
   breaks ties). Roulette results are only proposed when someone taps
   **Accept**.
+- **Ten-minute verdict.** While a film is playing, everyone gives a snap score
+  ten minutes in (the button unlocks on a countdown from the server-recorded
+  start time). It is locked once given and hidden until the final scores are
+  revealed, then the movie page shows each person's snap score against their
+  final one, and Stats reports the correlation across every pair — the actual
+  answer to whether ten minutes tells you anything — plus the typical change,
+  which way films drift, who reads a room fastest, and the films that grew on
+  the group or wore off most.
 - **Voting coins.** Everyone starts with the same budget (Settings, default
   100). On a shortlist vote you choose a film and how many coins to put behind
   it, from 0 up to your balance; spent coins are gone, re-voting refunds the
@@ -173,6 +181,7 @@ cold start.
 | `wishlist` | shared to-watch list: one row per film, who added it, optional note |
 | `coin_ledger` | every coin movement (initial, allowance per cycle, vote, refund, adjust); balance = sum |
 | `member_tasks` | one-off to-dos a member has ticked |
+| `first_impressions` | the ten-minute verdict: one snap score per member per night |
 
 Awards are derived from this data on read rather than stored, so a season
 summary is always consistent with the underlying ratings.

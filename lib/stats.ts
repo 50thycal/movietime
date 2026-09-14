@@ -1,6 +1,6 @@
 import { decadeOf } from "./format";
 import { mean, round1, summarizeRatings } from "./scoring";
-import type { Member, Movie, MovieNight, Prediction, Rating, SnackItem, SnackRating } from "./types";
+import type { FirstImpression, Member, Movie, MovieNight, Prediction, Rating, SnackItem, SnackRating } from "./types";
 
 /** Everything the stats engine needs for one completed night. */
 export interface NightData {
@@ -8,6 +8,7 @@ export interface NightData {
   movie: Movie;
   ratings: Rating[];
   predictions: Prediction[];
+  first_impressions: FirstImpression[];
   snacks: SnackItem[];
   snack_ratings: SnackRating[];
 }
@@ -408,6 +409,118 @@ export function predictionStats(data: Dataset, hitTolerance = 1): PredictionStat
   };
 }
 
+// ------------------------------------------------- first impressions
+
+export interface ImpressionPair {
+  night_id: string;
+  title: string;
+  member_id: string;
+  first: number;
+  final: number;
+  /** final − first: positive means the film grew on them. */
+  delta: number;
+}
+
+export interface FirstImpressionStats {
+  /** How many (ten-minute verdict, final score) pairs exist at all. */
+  pairs: number;
+  nights: number;
+  /**
+   * Pearson correlation between the ten-minute verdict and the final score,
+   * across every pair. This is the answer to "does the snap judgement mean
+   * anything": 1 is perfect agreement, 0 is noise, below 0 is contrarian.
+   * Null until there are enough pairs to say anything at all.
+   */
+  correlation: number | null;
+  /** Average size of the change, ignoring direction. */
+  mean_abs_change: number | null;
+  /** Average signed change. Positive means films tend to win the group over. */
+  mean_drift: number | null;
+  /** Share of pairs that landed within half a point of the final score. */
+  within_half_point: number | null;
+  per_member: {
+    member_id: string;
+    pairs: number;
+    correlation: number | null;
+    mean_abs_change: number | null;
+    mean_drift: number | null;
+  }[];
+  /** The member whose ten-minute verdict tracks their final score most closely. */
+  sharpest: { member_id: string; mean_abs_change: number } | null;
+  /** Group-level movers: first-impression average vs final average. */
+  biggest_riser: { night_id: string; title: string; first: number; final: number; delta: number } | null;
+  biggest_faller: { night_id: string; title: string; first: number; final: number; delta: number } | null;
+}
+
+/** Every (ten-minute verdict, final score) pair the group has produced. */
+export function impressionPairs(data: Dataset): ImpressionPair[] {
+  const out: ImpressionPair[] = [];
+  for (const n of data.nights) {
+    for (const f of n.first_impressions) {
+      const final = n.ratings.find((r) => r.member_id === f.member_id)?.score;
+      if (final == null) continue;
+      out.push({
+        night_id: n.night.id,
+        title: n.movie.title,
+        member_id: f.member_id,
+        first: f.score,
+        final,
+        delta: round1(final - f.score)!,
+      });
+    }
+  }
+  return out;
+}
+
+const MIN_PAIRS_FOR_CORRELATION = 4;
+
+export function firstImpressionStats(data: Dataset): FirstImpressionStats {
+  const pairs = impressionPairs(data);
+  const deltas = pairs.map((p) => p.delta);
+  const correlation = pairs.length >= MIN_PAIRS_FOR_CORRELATION ? pearson(pairs.map((p) => p.first), pairs.map((p) => p.final)) : null;
+
+  const per_member = data.members.map((m) => {
+    const mine = pairs.filter((p) => p.member_id === m.id);
+    return {
+      member_id: m.id,
+      pairs: mine.length,
+      correlation: mine.length >= MIN_PAIRS_FOR_CORRELATION ? round1(pearson(mine.map((p) => p.first), mine.map((p) => p.final)) ?? NaN) : null,
+      mean_abs_change: round1(mean(mine.map((p) => Math.abs(p.delta)))),
+      mean_drift: round1(mean(mine.map((p) => p.delta))),
+    };
+  }).map((p) => ({ ...p, correlation: Number.isNaN(p.correlation as number) ? null : p.correlation }));
+
+  const ranked = per_member
+    .filter((p) => p.mean_abs_change != null && p.pairs >= 2)
+    .sort((a, b) => a.mean_abs_change! - b.mean_abs_change! || b.pairs - a.pairs);
+
+  // Per film: what the room thought ten minutes in vs where it ended up.
+  const perNight = data.nights
+    .map((n) => {
+      const first = mean(n.first_impressions.map((f) => f.score));
+      const final = groupAverage(n);
+      return first == null || final == null
+        ? null
+        : { night_id: n.night.id, title: n.movie.title, first: round1(first)!, final, delta: round1(final - first)! };
+    })
+    .filter((x): x is NonNullable<typeof x> => x != null);
+  const riser = perNight.slice().sort((a, b) => b.delta - a.delta)[0];
+  const faller = perNight.slice().sort((a, b) => a.delta - b.delta)[0];
+
+  return {
+    pairs: pairs.length,
+    nights: perNight.length,
+    correlation: correlation == null || Number.isNaN(correlation) ? null : round1(correlation),
+    mean_abs_change: round1(mean(deltas.map(Math.abs))),
+    mean_drift: round1(mean(deltas)),
+    within_half_point: pairs.length ? round1((pairs.filter((p) => Math.abs(p.delta) <= 0.5).length / pairs.length) * 100) : null,
+    per_member,
+    sharpest: ranked[0] ? { member_id: ranked[0].member_id, mean_abs_change: ranked[0].mean_abs_change! } : null,
+    biggest_riser: riser && riser.delta > 0 ? riser : null,
+    biggest_faller: faller && faller.delta < 0 ? faller : null,
+  };
+}
+
 // ---------------------------------------------------------------- awards
 
 export type AwardKey =
@@ -418,7 +531,8 @@ export type AwardKey =
   | "crowd_pleaser"
   | "most_divisive"
   | "most_accurate_predictor"
-  | "longest_commitment";
+  | "longest_commitment"
+  | "crystal_ball";
 
 export const AWARD_META: Record<AwardKey, { emoji: string; label: string; blurb: string }> = {
   best_pick: { emoji: "🏆", label: "Best Pick", blurb: "Highest group rating so far" },
@@ -429,6 +543,7 @@ export const AWARD_META: Record<AwardKey, { emoji: string; label: string; blurb:
   most_divisive: { emoji: "⚔️", label: "Most Divisive", blurb: "Scores three or more points apart" },
   most_accurate_predictor: { emoji: "🎯", label: "Most Accurate Predictor", blurb: "Called their own score" },
   longest_commitment: { emoji: "🕐", label: "Longest Commitment", blurb: "Two and a half hours or more" },
+  crystal_ball: { emoji: "🔮", label: "Crystal Ball", blurb: "Ten minutes in, they already knew" },
 };
 
 export interface Award {
@@ -487,6 +602,25 @@ export function nightAwards(n: NightData, data: Dataset): Award[] {
     const tie = preds.filter((p) => p.own_error === best.own_error);
     if (tie.length === 1) {
       out.push({ key: "most_accurate_predictor", night_id: id, member_id: best.member_id, detail: `Predicted ${best.predicted_own}, gave ${best.actual_own}` });
+    }
+  }
+
+  // Whose ten-minute verdict landed closest to their own final score.
+  const impressions = n.first_impressions
+    .map((f) => ({ f, final: n.ratings.find((r) => r.member_id === f.member_id)?.score }))
+    .filter((x): x is { f: FirstImpression; final: number } => x.final != null)
+    .map((x) => ({ member_id: x.f.member_id, gap: Math.abs(x.final - x.f.score), first: x.f.score, final: x.final }))
+    .sort((a, b) => a.gap - b.gap);
+  if (impressions.length >= 2) {
+    const best = impressions[0];
+    const tied = impressions.filter((x) => x.gap === best.gap);
+    if (tied.length === 1) {
+      out.push({
+        key: "crystal_ball",
+        night_id: id,
+        member_id: best.member_id,
+        detail: best.gap === 0 ? `Called ${best.first} at ten minutes and never moved` : `Said ${best.first} early, finished on ${best.final}`,
+      });
     }
   }
 

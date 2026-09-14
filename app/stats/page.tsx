@@ -26,7 +26,9 @@ export default function StatsPage() {
   return (
     <div className="flex flex-col gap-3 pt-1">
       <h1 className="text-2xl font-black">
-        Stats <span className="text-base text-muted">{data.nights} nights</span>
+        Stats <span className="text-base text-muted">
+          {data.nights} night{data.nights === 1 ? "" : "s"}
+        </span>
       </h1>
       <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
         {(
@@ -326,8 +328,10 @@ function Genres({ data, m }: { data: Any; m: Lookup }) {
 function Extras({ data, m }: { data: Any; m: Lookup }) {
   const s = data.snacks;
   const p = data.predictions;
+  const fi = data.first_impressions;
   return (
     <div className="flex flex-col gap-2">
+      <FirstImpressionBlock fi={fi} m={m} />
       <div className="card p-3">
         <div className="label mb-2">Snacks &amp; drinks</div>
         {s.total_items === 0 && <div className="text-sm text-muted">Nothing logged yet.</div>}
@@ -357,6 +361,83 @@ function Extras({ data, m }: { data: Any; m: Lookup }) {
         {p.most_exceeded && <Line k="Exceeded expectations" v={`${p.most_exceeded.title}: ${fmtScore(p.most_exceeded.predicted)} → ${fmtScore(p.most_exceeded.actual)}`} />}
         {p.most_disappointed && <Line k="Disappointed" v={`${p.most_disappointed.title}: ${fmtScore(p.most_disappointed.predicted)} → ${fmtScore(p.most_disappointed.actual)}`} />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Does the ten-minute verdict actually predict the final score? The headline
+ * is a correlation across every (snap, final) pair the group has produced.
+ */
+function FirstImpressionBlock({ fi, m }: { fi: Any; m: Lookup }) {
+  if (!fi) return null;
+  const r = fi.correlation as number | null;
+  const verdict =
+    r == null
+      ? "Not enough ten-minute verdicts yet — give a few and this fills in."
+      : r >= 0.8
+        ? "Strong. Ten minutes is enough to call it."
+        : r >= 0.5
+          ? "Real, but loose. The first ten minutes get you most of the way."
+          : r >= 0.2
+            ? "Weak. The snap verdict is barely better than a guess."
+            : r >= -0.2
+              ? "None at all. What you think at ten minutes says nothing about the end."
+              : "Inverted — whatever the room thinks early, the opposite happens.";
+  return (
+    <div className="card p-3">
+      <div className="label mb-2">⏱ Ten-minute verdict vs final score</div>
+      {fi.pairs === 0 ? (
+        <div className="text-sm text-muted">Nobody has given a ten-minute verdict yet. They&apos;re taken while the movie plays.</div>
+      ) : (
+        <>
+          <div className="flex items-end gap-3">
+            <div className="shrink-0">
+              {r == null ? (
+                <div className="text-lg font-black text-muted">Not yet</div>
+              ) : (
+                <div className="text-4xl font-black text-gold">{r.toFixed(2)}</div>
+              )}
+              <div className="text-[10px] font-bold uppercase tracking-wider text-muted">
+                correlation · {fi.pairs} pair{fi.pairs === 1 ? "" : "s"}
+              </div>
+            </div>
+            <p className="flex-1 text-xs text-muted">{verdict}</p>
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+            <Stat label="Typical change" value={fi.mean_abs_change == null ? "—" : `±${fmtScore(fi.mean_abs_change)}`} />
+            <Stat
+              label="Drift"
+              value={fi.mean_drift == null ? "—" : `${fi.mean_drift > 0 ? "+" : ""}${fmtScore(fi.mean_drift)}`}
+              sub={fi.mean_drift > 0 ? "films grow on us" : fi.mean_drift < 0 ? "films wear off" : undefined}
+            />
+            <Stat label="Called it" value={fi.within_half_point == null ? "—" : `${Math.round(fi.within_half_point)}%`} sub="within ½ point" />
+          </div>
+          {fi.sharpest && <Line k="Sharpest read" v={`changes by only ${fmtScore(fi.sharpest.mean_abs_change)} on average`} who={m(fi.sharpest.member_id)} />}
+          {fi.biggest_riser && (
+            <Line k="Grew on us most" v={`${fi.biggest_riser.title}: ${fmtScore(fi.biggest_riser.first)} → ${fmtScore(fi.biggest_riser.final)}`} />
+          )}
+          {fi.biggest_faller && (
+            <Line k="Wore off most" v={`${fi.biggest_faller.title}: ${fmtScore(fi.biggest_faller.first)} → ${fmtScore(fi.biggest_faller.final)}`} />
+          )}
+          <div className="mt-2 flex flex-col gap-1">
+            {fi.per_member
+              .filter((x: Any) => x.pairs > 0)
+              .sort((a: Any, b: Any) => (a.mean_abs_change ?? 99) - (b.mean_abs_change ?? 99))
+              .map((x: Any) => (
+                <div key={x.member_id} className="flex items-center gap-2 text-sm">
+                  <Avatar member={m(x.member_id)} size={20} />
+                  <span className="flex-1 font-bold">{m(x.member_id)?.name}</span>
+                  <span className="text-xs text-muted">
+                    {x.pairs} · drift {x.mean_drift > 0 ? "+" : ""}
+                    {fmtScore(x.mean_drift)}
+                  </span>
+                  <span className="font-black text-gold">±{fmtScore(x.mean_abs_change)}</span>
+                </div>
+              ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

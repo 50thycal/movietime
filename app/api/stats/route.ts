@@ -3,6 +3,7 @@ import { fail, ok } from "@/lib/http";
 import { loadDataset } from "@/lib/server";
 import {
   awardTotals,
+  firstImpressionStats,
   criticStats,
   groupGenreStats,
   leaderboards,
@@ -31,6 +32,7 @@ export async function GET() {
       runtime: runtimeStats(data),
       snacks: snackStats(data),
       predictions: predictionStats(data),
+      first_impressions: firstImpressionStats(data),
       awards: awardTotals(data),
       taste: tasteProfile(data),
     });

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { db } from "../lib/db";
 import * as s from "../lib/server";
+import { firstImpressionStats } from "../lib/stats";
 import { makeTestDb, MOVIE } from "./helpers/pglite";
 
 let close: () => Promise<void>;
@@ -403,4 +404,50 @@ test("a finished listing can be corrected or removed", async () => {
   assert.deepEqual(await s.loadBalances(sql), balancesBefore);
   assert.equal((await sql`SELECT count(*)::int AS n FROM ratings WHERE night_id = ${night.night.id}`)[0].n, 0);
   assert.equal(await s.currentSelectorId(sql), rotationBefore);
+});
+
+test("first impressions are taken during the movie, locked, and hidden until the reveal", async () => {
+  const sql = await db();
+  const members = await s.loadMembers(sql);
+  const active = members.filter((m) => m.active);
+  const current = (await s.currentSelectorId(sql))!;
+  const others = active.filter((m) => m.id !== current);
+
+  let night = await s.proposeMovie(sql, current, MOVIE({ tmdb_id: 700, title: "Slow Burn" }));
+  // Not before the movie starts.
+  await assert.rejects(s.submitFirstImpression(sql, night.night.id, current, 7), /hasn't started yet/);
+  for (const o of others) night = await s.decideApproval(sql, night.night.id, o.id, "approve", null);
+  await assert.rejects(s.submitFirstImpression(sql, night.night.id, current, 7), /hasn't started yet/);
+
+  night = await s.startMovie(sql, night.night.id, current);
+  night = await s.submitFirstImpression(sql, night.night.id, current, 4);
+  // Hidden from everyone, including the person who gave it, except their own.
+  assert.deepEqual(night.first_impressions, []);
+  assert.deepEqual(night.impressed_member_ids, [current]);
+  assert.equal(night.my_first_impression, 4);
+  assert.equal((await s.loadNightDetail(sql, night.night.id, others[0].id)).my_first_impression, null);
+  // One shot each, and the half-point rule is enforced by the database itself.
+  await assert.rejects(s.submitFirstImpression(sql, night.night.id, current, 9), /already given/);
+  await assert.rejects(sql`INSERT INTO first_impressions (night_id, member_id, score) VALUES (${night.night.id}, ${others[0].id}, 7.25)`);
+  for (const [i, o] of others.entries()) await s.submitFirstImpression(sql, night.night.id, o.id, 3 + i);
+
+  // It shows up as a to-do only while it is still open.
+  const fresh = await s.loadMembers(sql);
+  void fresh;
+  await s.finishMovie(sql, night.night.id, current);
+  await assert.rejects(s.submitFirstImpression(sql, night.night.id, current, 6), /Too late/);
+
+  // The film wins everyone over: finals are far above the ten-minute verdicts.
+  for (const m of active) night = await s.submitRating(sql, night.night.id, m.id, 8);
+  assert.equal(night.night.status, "complete");
+  assert.equal(night.first_impressions.length, active.length);
+
+  const data = await s.loadDataset(sql);
+  const stats = firstImpressionStats(data);
+  assert.equal(stats.pairs, active.length);
+  assert.ok(stats.mean_drift !== null && stats.mean_drift > 0, "a film that grew on the group should drift upward");
+  assert.equal(stats.biggest_riser?.title, "Slow Burn");
+  assert.ok(stats.per_member.find((p) => p.member_id === current)!.mean_abs_change! > 0);
+  const awards = (await s.loadNightDetail(sql, night.night.id, current)).awards;
+  assert.ok(awards.some((a) => a.key === "crystal_ball"));
 });

@@ -2,7 +2,8 @@
 
 import { posterUrl } from "@/lib/tmdb";
 import type { Member } from "@/lib/types";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import { useViewportInsets } from "@/lib/useViewport";
 
 export function Avatar({ member, size = 36, ring = false }: { member: Member | null | undefined; size?: number; ring?: boolean }) {
   if (!member) return <div style={{ width: size, height: size }} className="rounded-full bg-card-2" />;
@@ -39,19 +40,43 @@ export function Poster({ path, title, className = "", size = "w342" }: { path: s
 }
 
 export function Sheet({ open, onClose, title, children }: { open: boolean; onClose: () => void; title?: string; children: React.ReactNode }) {
+  const { height, keyboard } = useViewportInsets();
+
+  /**
+   * Hiding overflow isn't enough to pin the page on iOS — it keeps scrolling
+   * behind the sheet, and opening the keyboard drags it to the bottom. Taking
+   * the body out of flow at its current offset actually holds it, and putting
+   * the offset back on close means the page doesn't jump either.
+   */
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    const y = window.scrollY;
+    const { style } = document.body;
+    const prev = { position: style.position, top: style.top, left: style.left, right: style.right, overflow: style.overflow };
+    style.position = "fixed";
+    style.top = `-${y}px`;
+    style.left = "0";
+    style.right = "0";
+    style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = prev;
+      Object.assign(style, prev);
+      window.scrollTo(0, y);
     };
   }, [open]);
+
   if (!open) return null;
+  // Measure against the visible area, not the layout viewport, so the panel
+  // and its submit button stay above the keyboard rather than under it.
+  const maxHeight = height == null ? "92dvh" : `${Math.round(height * 0.92)}px`;
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center overflow-hidden bg-black/60 backdrop-blur-sm"
+      style={{ paddingBottom: keyboard }}
+      onClick={onClose}
+    >
       <div
-        className="rise flex max-h-[92dvh] w-full max-w-lg flex-col rounded-t-3xl border border-line bg-bg-2"
+        className="rise flex w-full max-w-lg flex-col rounded-t-3xl border border-line bg-bg-2"
+        style={{ maxHeight }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
       >
@@ -61,10 +86,25 @@ export function Sheet({ open, onClose, title, children }: { open: boolean; onClo
             ✕
           </button>
         </div>
-        <div className="safe-b overflow-y-auto px-5 pb-4">{children}</div>
+        <div className={`overflow-y-auto overscroll-contain px-5 ${keyboard ? "pb-4" : "safe-b"}`}>{children}</div>
       </div>
     </div>
   );
+}
+
+/**
+ * Focus an input once the sheet has finished sliding in. Focusing during the
+ * animation makes the browser scroll to chase a moving target, which is the
+ * jump people see; `preventScroll` stops it chasing at all.
+ */
+export function useSheetFocus<T extends HTMLElement>(open: boolean, delay = 280) {
+  const ref = useRef<T>(null);
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => ref.current?.focus({ preventScroll: true }), delay);
+    return () => clearTimeout(t);
+  }, [open, delay]);
+  return ref;
 }
 
 /** 1–10 in half points, big enough to hit with a thumb. */

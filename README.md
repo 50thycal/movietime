@@ -141,6 +141,29 @@ proposed ──(everyone else approves)──▶ approved ──(Start)──▶
 - Reviews, snacks and snack ratings can be added any time after the night
   exists, including well after it completes.
 
+### Keyboards on phones
+
+A soft keyboard doesn't change the layout viewport on iOS — it only shrinks
+the *visual* viewport. Anything positioned `fixed` (the bottom nav, a sheet
+pinned to the bottom) therefore ends up underneath it, and the browser scrolls
+the page to chase the focused input, which is what made the app jump to the
+bottom when someone started typing. Three things keep it still:
+
+- `lib/useViewport.ts` measures the gap between the two viewports. The bottom
+  nav stands down while the keyboard is up, and a sheet is sized against the
+  visible area rather than `dvh`, so its content and submit button stay above
+  the keyboard instead of under it.
+- Opening a sheet pins the body at its current offset (`position: fixed` with
+  the saved scroll top) rather than only hiding overflow, which does not hold
+  the page on iOS. Closing it restores the exact position.
+- Sheet inputs focus *after* the open animation with `preventScroll`, instead
+  of `autoFocus` firing mid-animation and making the browser chase a moving
+  target.
+
+`interactiveWidget: "resizes-content"` in the viewport meta fixes the whole
+class of problem on browsers that support it; Safari ignores it, hence the
+above.
+
 ### Shared state
 
 Every write goes to Postgres, returns the canonical updated record, and the

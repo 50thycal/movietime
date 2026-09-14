@@ -9,7 +9,7 @@ import { fmtDate } from "@/lib/format";
 import { rotationOrder } from "@/lib/rotation";
 import { MAX_CANDIDATES } from "@/lib/constants";
 import { useApp } from "./Shell";
-import { Avatar, ErrorNote, Poster, ScorePicker, Sheet, Spinner } from "./ui";
+import { Avatar, ErrorNote, Poster, ScorePicker, Sheet, Spinner, useSheetFocus } from "./ui";
 
 /** Search TMDB and submit one pick, or a shortlist for a vote. Wishlist shows when the search is empty. */
 export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose: () => void; onPicked?: (n: NightDetail) => void }) {
@@ -18,6 +18,7 @@ export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const { data, isLoading, error: searchError } = useSearch(q);
+  const searchRef = useSheetFocus<HTMLInputElement>(open);
   const { data: wishlist } = useWishlist();
   const { members } = useApp();
 
@@ -49,7 +50,7 @@ export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose:
   return (
     <Sheet open={open} onClose={onClose} title="Pick a movie">
       <p className="mb-2 text-xs text-muted">Tap a result to propose it, or use + to build a shortlist (up to six) and let everyone vote.</p>
-      <input className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
+      <input ref={searchRef} className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} inputMode="search" />
       {shortlist.length > 0 && (
         <div className="card mb-3 flex flex-col gap-2 p-3">
           <div className="label">Shortlist · {shortlist.length}/{MAX_CANDIDATES}</div>
@@ -169,6 +170,7 @@ export function BackfillSheet({ open, onClose, defaultSelector = null }: { open:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const { data, isLoading } = useSearch(q);
+  const searchRef = useSheetFocus<HTMLInputElement>(open && !movie);
   const active = members.filter((m) => m.active);
 
   async function submit() {
@@ -199,7 +201,7 @@ export function BackfillSheet({ open, onClose, defaultSelector = null }: { open:
     <Sheet open={open} onClose={onClose} title="Add a past movie">
       {!movie ? (
         <>
-          <input className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
+          <input ref={searchRef} className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} inputMode="search" />
           {isLoading && !data && <Spinner />}
           <div className="flex flex-col gap-2">
             {data?.map((m) => (
@@ -364,6 +366,7 @@ export function WishlistAddSheet({ open, onClose }: { open: boolean; onClose: ()
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
   const { data, isLoading } = useSearch(q);
+  const searchRef = useSheetFocus<HTMLInputElement>(open);
   async function add(m: TmdbSearchResult) {
     setBusy(m.tmdb_id);
     setError(null);
@@ -380,7 +383,7 @@ export function WishlistAddSheet({ open, onClose }: { open: boolean; onClose: ()
   }
   return (
     <Sheet open={open} onClose={onClose} title="Add to wishlist">
-      <input className="input mb-2" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
+      <input ref={searchRef} className="input mb-2" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} inputMode="search" />
       <input className="input mb-3" placeholder="Why? (optional)" value={note} maxLength={140} onChange={(e) => setNote(e.target.value)} />
       <ErrorNote error={error} />
       {isLoading && !data && <Spinner />}

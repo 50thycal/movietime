@@ -352,3 +352,14 @@ test("vote outcome: majority, picker breaks ties, waits for everyone", () => {
   // Full three-way tie with picker on z → z.
   assert.equal(voteOutcome([v("a", "z"), v("b", "y"), v("c", "x")], ["x", "y", "z"], "a", ["a", "b", "c"]), "z");
 });
+
+test("vote outcome is weighted by coins, coinless votes still count as one", () => {
+  const ids = ["a", "b", "c", "d"];
+  const v = (m: string, movie: string, amount: number) => ({ member_id: m, movie_id: movie, amount });
+  // Three cheap votes for x lose to one big stake on y.
+  assert.equal(voteOutcome([v("a", "x", 1), v("b", "x", 1), v("c", "x", 1), v("d", "y", 10)], ["x", "y"], "a", ids), "y");
+  // Coinless votes count as 1 each.
+  assert.equal(voteOutcome([v("a", "x", 0), v("b", "x", 0), v("c", "y", 1), v("d", "z", 0)], ["x", "y", "z"], "c", ids), "x");
+  // Equal stakes → picker's choice.
+  assert.equal(voteOutcome([v("a", "x", 5), v("b", "y", 5), v("c", "x", 5), v("d", "y", 5)], ["x", "y"], "b", ids), "y");
+});

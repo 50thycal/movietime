@@ -11,7 +11,7 @@ import { Avatar, ErrorNote, Poster } from "@/components/ui";
 import { send } from "@/lib/api";
 import { fmtRuntime, fmtScore } from "@/lib/format";
 import { summarizeRatings } from "@/lib/scoring";
-import type { NightDetail } from "@/lib/types";
+import type { NightDetail, Todo } from "@/lib/types";
 
 type Open = "pick" | "rate" | "predict" | "reject" | "picker" | null;
 
@@ -64,7 +64,10 @@ function TonightInner() {
         <div className="absolute -right-10 -top-10 h-40 w-40 rounded-full opacity-25 blur-2xl" style={{ background: turn?.color }} />
         <div className="flex items-center justify-between">
           <div className="label">{current ? "Tonight's picker" : "Up next"}</div>
-          {!current && <span className="chip">change</span>}
+          <div className="flex items-center gap-2">
+            <span className="chip" title="Your voting coins">🪙 {state.balances[me.id] ?? 0}</span>
+            {!current && <span className="chip">change</span>}
+          </div>
         </div>
         <div className="mt-1 flex items-center gap-4">
           <Avatar member={turn} size={64} ring />
@@ -82,6 +85,8 @@ function TonightInner() {
           </div>
         </div>
       </section>
+
+      {state.todos.length > 0 && <TodoCard todos={state.todos} />}
 
       {/* 2. Current movie + 3. primary action */}
       {current ? (
@@ -267,22 +272,58 @@ function PrimaryAction({
 }
 
 function VoteBoard({ detail, meId, busy, act }: { detail: NightDetail; meId: string; busy: boolean; act: (fn: () => Promise<unknown>) => Promise<void> }) {
-  const { members } = useApp();
-  const mine = detail.votes.find((v) => v.member_id === meId)?.movie_id ?? null;
+  const { members, state } = useApp();
+  const myVote = detail.votes.find((v) => v.member_id === meId) ?? null;
+  const mine = myVote?.movie_id ?? null;
+  // What you can put behind a vote: your balance plus whatever this vote already holds.
+  const available = (state?.balances[meId] ?? 0) + (myVote?.amount ?? 0);
+  const [stake, setStake] = useState<number>(myVote?.amount ?? 0);
+  const clamped = Math.min(stake, available);
+  const quick = [0, 5, 10, 25, 50].filter((q) => q <= available);
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
         <div className="label">{detail.selector.name}&apos;s shortlist · vote for one</div>
         <span className="text-xs text-muted">{detail.votes.length}/{members.filter((m) => m.active).length} voted</span>
       </div>
+      <div className="flex flex-col gap-1.5 rounded-xl bg-bg-2 p-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="font-bold">🪙 Coins behind your vote</span>
+          <span className="text-muted">{available} available</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {quick.map((q) => (
+            <button key={q} className={`chip ${clamped === q ? "chip-on" : ""}`} onClick={() => setStake(q)}>
+              {q}
+            </button>
+          ))}
+          {available > 0 && (
+            <button className={`chip ${clamped === available && !quick.includes(available) ? "chip-on" : ""}`} onClick={() => setStake(available)}>
+              all {available}
+            </button>
+          )}
+          <input
+            type="number"
+            min={0}
+            max={available}
+            value={clamped}
+            onChange={(e) => setStake(Math.max(0, Math.min(available, Math.floor(Number(e.target.value) || 0))))}
+            className="input ml-auto w-20 min-h-9 text-center"
+            aria-label="Coins"
+          />
+        </div>
+        <div className="text-[11px] text-muted">Spent coins are gone. A vote with 0 coins still counts as one voice. Everyone gets an allowance each new cycle.</div>
+      </div>
       {detail.candidates.map((c) => {
-        const voters = detail.votes.filter((v) => v.movie_id === c.id).map((v) => members.find((m) => m.id === v.member_id));
+        const cv = detail.votes.filter((v) => v.movie_id === c.id);
+        const voters = cv.map((v) => members.find((m) => m.id === v.member_id));
+        const coins = cv.reduce((a, v) => a + Math.max(1, v.amount), 0);
         const on = mine === c.id;
         return (
           <button
             key={c.id}
             disabled={busy}
-            onClick={() => act(() => send("POST", `/api/nights/${detail.night.id}/vote`, { movie_id: c.id }))}
+            onClick={() => act(() => send("POST", `/api/nights/${detail.night.id}/vote`, { movie_id: c.id, amount: clamped }))}
             className={`flex items-center gap-3 rounded-2xl border p-2 text-left transition active:scale-[0.99] ${on ? "border-gold bg-gold/10" : "border-line bg-bg-2"}`}
           >
             <Poster path={c.poster_path} title={c.title} className="w-14 shrink-0" size="w185" />
@@ -294,7 +335,9 @@ function VoteBoard({ detail, meId, busy, act }: { detail: NightDetail; meId: str
               <div className="truncate text-xs text-muted">{c.genres.map((g) => g.name).join(" · ")}</div>
             </div>
             <div className="flex flex-col items-end gap-1">
-              <div className="text-xl font-black">{voters.length}</div>
+              <div className="text-xl font-black">
+                {coins} <span className="text-xs font-bold text-muted">🪙</span>
+              </div>
               <div className="flex -space-x-1">
                 {voters.map((m) => (
                   <Avatar key={m?.id} member={m} size={18} />
@@ -305,6 +348,56 @@ function VoteBoard({ detail, meId, busy, act }: { detail: NightDetail; meId: str
         );
       })}
     </div>
+  );
+}
+
+function TodoCard({ todos }: { todos: Todo[] }) {
+  const [openList, setOpenList] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const icon: Record<Todo["kind"], string> = { backfill: "🕰️", rate_missing: "⭐", approve: "✓", vote: "🗳", rate_now: "⭐", predict: "🎯" };
+  return (
+    <section className="card p-4">
+      <button className="flex w-full items-center justify-between" onClick={() => setOpenList((o) => !o)}>
+        <div className="label">Your to-dos · {todos.length}</div>
+        <span className="chip">{openList ? "hide" : "show"}</span>
+      </button>
+      {openList && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          {todos.slice(0, 8).map((t) => (
+            <div key={t.key} className="flex items-center gap-2 rounded-xl bg-bg-2 px-3 py-2">
+              <span className="text-lg">{icon[t.kind]}</span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-bold">{t.title}</div>
+                {t.detail && <div className="truncate text-[11px] text-muted">{t.detail}</div>}
+              </div>
+              {t.href && t.href !== "/" && (
+                <Link href={t.href} className="chip chip-on">
+                  Go
+                </Link>
+              )}
+              {t.dismissible && (
+                <button
+                  className="chip"
+                  disabled={busy}
+                  title="Mark done"
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await send("POST", `/api/tasks/${t.key}`);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Done
+                </button>
+              )}
+            </div>
+          ))}
+          {todos.length > 8 && <div className="text-center text-xs text-muted">+{todos.length - 8} more</div>}
+        </div>
+      )}
+    </section>
   );
 }
 

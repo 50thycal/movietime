@@ -97,6 +97,17 @@ proposed ──(everyone else approves)──▶ approved ──(Start)──▶
   one; when all votes are in, the most-voted film wins, and the picker's vote
   breaks ties). Roulette results are only proposed when someone taps
   **Accept**.
+- **Voting coins.** Everyone starts with the same budget (Settings, default
+  100). On a shortlist vote you choose a film and how many coins to put behind
+  it, from 0 up to your balance; spent coins are gone, re-voting refunds the
+  earlier stake, and withdrawing a shortlist refunds everyone. The film with
+  the most coins wins (a coinless vote counts as one). A **cycle** is one full
+  pass through the picking order; when the turn comes back to the first
+  picker, everyone is paid the allowance (default 50). Settings can change
+  both amounts, pay an allowance early, and nudge individual balances.
+- **To-dos** on Tonight, per person: add the movies you picked before the app
+  (one-off, tick it when done), rate any watched film you never scored, and
+  live items such as "vote on the shortlist" or "rate tonight's movie".
 - **Wishlist**: one shared running list of films the group wants to get to
   (History → Wishlist). Anyone can add or remove, each entry shows who
   added it and why, the picker sees the list at the top of the pick sheet
@@ -157,6 +168,8 @@ cold start.
 | `night_candidates` | the films a proposal put forward (one, or a shortlist of up to six) |
 | `night_votes` | one vote per member per shortlist proposal |
 | `wishlist` | shared to-watch list: one row per film, who added it, optional note |
+| `coin_ledger` | every coin movement (initial, allowance per cycle, vote, refund, adjust); balance = sum |
+| `member_tasks` | one-off to-dos a member has ticked |
 
 Awards are derived from this data on read rather than stored, so a season
 summary is always consistent with the underlying ratings.

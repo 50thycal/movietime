@@ -77,19 +77,22 @@ export function approvalOutcome(
 
 /**
  * Shortlist vote: once every active member has voted, the film with the most
- * votes wins. Ties go to whichever tied film the picker voted for, then to
- * shortlist order. Returns null while votes are still outstanding.
+ * coins behind it wins (a coinless vote counts as 1). Ties go to whichever
+ * tied film the picker voted for, then to shortlist order. Returns null while
+ * votes are still outstanding.
  */
 export function voteOutcome(
-  votes: { member_id: string; movie_id: string }[],
+  votes: { member_id: string; movie_id: string; amount?: number }[],
   candidateIds: string[],
   selectorId: string,
   activeMemberIds: string[],
 ): string | null {
   const voted = new Set(votes.map((v) => v.member_id));
   if (activeMemberIds.length === 0 || !activeMemberIds.every((id) => voted.has(id))) return null;
+  // Weighted by coins. A vote with no coins still counts as one voice, so a
+  // broke member can't be ignored entirely and a vote can always resolve.
   const counts = new Map(candidateIds.map((id) => [id, 0]));
-  for (const v of votes) if (counts.has(v.movie_id)) counts.set(v.movie_id, counts.get(v.movie_id)! + 1);
+  for (const v of votes) if (counts.has(v.movie_id)) counts.set(v.movie_id, counts.get(v.movie_id)! + Math.max(1, v.amount ?? 0));
   const max = Math.max(...counts.values());
   const tied = candidateIds.filter((id) => counts.get(id) === max);
   if (tied.length === 1) return tied[0];

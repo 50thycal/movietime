@@ -157,11 +157,11 @@ export function ChangePickerSheet({ open, onClose }: { open: boolean; onClose: (
 }
 
 /** History → add a movie the group watched before the app existed. */
-export function BackfillSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function BackfillSheet({ open, onClose, defaultSelector = null }: { open: boolean; onClose: () => void; defaultSelector?: string | null }) {
   const { members, meId } = useApp();
   const [q, setQ] = useState("");
   const [movie, setMovie] = useState<TmdbSearchResult | null>(null);
-  const [selector, setSelector] = useState<string | null>(null);
+  const [selector, setSelector] = useState<string | null>(defaultSelector);
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [scores, setScores] = useState<Record<string, number | null>>({});
   const [busy, setBusy] = useState(false);

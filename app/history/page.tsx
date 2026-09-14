@@ -31,7 +31,7 @@ function HistoryInner() {
   const [tab, setTab] = useState<"watched" | "wishlist">(params.get("tab") === "wishlist" ? "wishlist" : "watched");
   const { data, error } = useHistory();
   const { data: wishlist } = useWishlist();
-  const { members } = useApp();
+  const { members, me } = useApp();
   const [selector, setSelector] = useState<string | null>(null);
   const [genre, setGenre] = useState<string | null>(null);
   const [year, setYear] = useState<number | null>(null);
@@ -40,7 +40,7 @@ function HistoryInner() {
   const [decade, setDecade] = useState<string | null>(null);
   const [sort, setSort] = useState<(typeof SORTS)[number]["key"]>("newest");
   const [showFilters, setShowFilters] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState(params.get("backfill") === "1");
 
   const entries = useMemo(() => data?.entries ?? [], [data]);
   const genres = useMemo(() => [...new Set(entries.flatMap((e) => e.movie.genres.map((g) => g.name)))].sort(), [entries]);
@@ -104,7 +104,7 @@ function HistoryInner() {
           </button>
         </div>
       </div>
-      <BackfillSheet open={adding} onClose={() => setAdding(false)} />
+      <BackfillSheet open={adding} onClose={() => setAdding(false)} defaultSelector={params.get("backfill") === "1" ? me?.id ?? null : null} />
 
       <div className="no-scrollbar flex gap-2 overflow-x-auto pb-1">
         {SORTS.map((s) => (

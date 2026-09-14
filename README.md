@@ -113,6 +113,9 @@ proposed ──(everyone else approves)──▶ approved ──(Start)──▶
   added it and why, the picker sees the list at the top of the pick sheet
   and can propose or shortlist straight from it, and a film drops off
   automatically once it has been watched.
+- **Fixing a listing**: any finished movie night can be edited from its movie
+  page (✎ Edit) to correct who picked it or the date watched, or removed from
+  history entirely if it was added by mistake.
 - **Past movies** can be added from History (search, who picked it, date,
   optional ratings). They land straight in history without touching the
   rotation, and anyone who wasn't rated can add their own score later from

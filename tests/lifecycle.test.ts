@@ -355,3 +355,52 @@ test("to-dos: backfill one-off, unrated films, and live actions", async () => {
   assert.ok(!home.todos.some((t) => t.kind === "vote"));
   await s.withdrawProposal(sql, proposal.night.id, current);
 });
+
+test("a finished listing can be corrected or removed", async () => {
+  const sql = await db();
+  const members = await s.loadMembers(sql);
+  const calvin = members.find((m) => m.name === "Calvin")!;
+  const molly = members.find((m) => m.name === "Molly")!;
+  const sam = members.find((m) => m.name === "Sam")!;
+  const rotationBefore = await s.currentSelectorId(sql);
+
+  // A backfill with the wrong date and the wrong picker.
+  let night = await s.backfillNight(sql, calvin.id, MOVIE({ tmdb_id: 555, title: "Mistyped" }), calvin.id, new Date("2025-11-02T20:00:00Z"), [
+    { member_id: calvin.id, score: 7 },
+  ]);
+  assert.equal(new Date(night.night.completed_at!).getUTCFullYear(), 2025);
+
+  night = await s.updateNight(sql, molly.id, night.night.id, { selectorId: sam.id, watchedAt: new Date("2024-02-09T20:00:00Z") });
+  assert.equal(night.night.selector_id, sam.id);
+  assert.equal(night.selector.name, "Sam");
+  assert.equal(new Date(night.night.completed_at!).getUTCFullYear(), 2024);
+  // A backfilled night keeps every stamp in step, so history sorts correctly.
+  assert.equal(night.night.proposed_at, night.night.completed_at);
+  assert.equal(night.night.watched_at, night.night.completed_at);
+  // Ratings survive the edit and the picker stats follow the new selector.
+  assert.equal(night.ratings.length, 1);
+  assert.ok(s.loadDataset(sql));
+  const picked = (await s.loadHistory(sql)).find((h) => h.movie.title === "Mistyped")!;
+  assert.equal(picked.selector_id, sam.id);
+  // Editing never touches whose turn it is.
+  assert.equal(await s.currentSelectorId(sql), rotationBefore);
+  await assert.rejects(
+    s.updateNight(sql, molly.id, night.night.id, { selectorId: "00000000-0000-4000-8000-000000000000" }),
+    /Unknown member/,
+  );
+
+  // A live night can't be edited this way.
+  const current = (await s.currentSelectorId(sql))!;
+  const live = await s.proposeMovie(sql, current, MOVIE({ tmdb_id: 556, title: "Live" }));
+  await assert.rejects(s.updateNight(sql, molly.id, live.night.id, { watchedAt: new Date() }), /finished/);
+  await assert.rejects(s.deleteNight(sql, molly.id, live.night.id), /finished/);
+  await s.withdrawProposal(sql, live.night.id, current);
+
+  // Removing a listing takes its ratings with it and leaves balances alone.
+  const balancesBefore = await s.loadBalances(sql);
+  await s.deleteNight(sql, molly.id, night.night.id);
+  assert.ok(!(await s.loadHistory(sql)).some((h) => h.movie.title === "Mistyped"));
+  assert.deepEqual(await s.loadBalances(sql), balancesBefore);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM ratings WHERE night_id = ${night.night.id}`)[0].n, 0);
+  assert.equal(await s.currentSelectorId(sql), rotationBefore);
+});

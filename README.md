@@ -121,6 +121,11 @@ proposed ──(everyone else approves)──▶ approved ──(Start)──▶
   added it and why, the picker sees the list at the top of the pick sheet
   and can propose or shortlist straight from it, and a film drops off
   automatically once it has been watched.
+- **Fixing a snack or drink**: tap ✎ on any item to correct who brought it,
+  what it was called, whether it's food or a glass, or its note — or remove it.
+  Open to anyone, because the person who types it in is often not the person
+  who brought it. Ratings belong to the item, so they survive a reassignment
+  and the provider stats follow the correction.
 - **Fixing a listing**: any finished movie night can be edited from its movie
   page (✎ Edit) to correct who picked it or the date watched, or removed from
   history entirely if it was added by mistake.

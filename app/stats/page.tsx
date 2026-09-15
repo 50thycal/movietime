@@ -455,9 +455,15 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 function Line({ k, v, who }: { k: string; v: string; who?: Member }) {
   return (
     <div className="flex items-center gap-2 py-1 text-sm">
-      <span className="w-28 shrink-0 text-xs text-muted">{k}</span>
+      <span className="w-24 shrink-0 text-xs text-muted">{k}</span>
       <span className="min-w-0 flex-1 truncate font-bold">{v}</span>
-      {who && <Avatar member={who} size={20} />}
+      {/* Name as well as avatar: nobody remembers who is which emoji. */}
+      {who && (
+        <span className="flex shrink-0 items-center gap-1 text-xs font-bold">
+          <Avatar member={who} size={20} />
+          {who.name}
+        </span>
+      )}
     </div>
   );
 }

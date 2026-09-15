@@ -6,8 +6,9 @@ import { fmtRelative, fmtScore } from "@/lib/format";
 import { summarizeRatings } from "@/lib/scoring";
 import { AWARD_META, predictionResults, type AwardKey } from "@/lib/stats";
 import { mean, round1 } from "@/lib/scoring";
-import type { Member, NightDetail, SnackKind } from "@/lib/types";
+import type { Member, NightDetail, SnackItem, SnackKind } from "@/lib/types";
 import { useApp } from "./Shell";
+import { EditSnackSheet } from "./sheets";
 import { Avatar, ErrorNote, ScorePicker, Stars } from "./ui";
 
 export function Results({ detail }: { detail: NightDetail }) {
@@ -256,6 +257,7 @@ export function Snacks({ detail }: { detail: NightDetail }) {
   const [note, setNote] = useState("");
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState<SnackItem | null>(null);
   const id = detail.night.id;
 
   async function run(fn: () => Promise<unknown>) {
@@ -296,11 +298,9 @@ export function Snacks({ detail }: { detail: NightDetail }) {
                 <div className="text-lg font-black text-gold">{a == null ? "—" : fmtScore(a)}</div>
                 <div className="text-[10px] text-muted">{detail.snack_ratings.filter((r) => r.snack_item_id === s.id).length} votes</div>
               </div>
-              {s.member_id === meId && (
-                <button className="text-xs text-muted underline" onClick={() => run(() => send("DELETE", `/api/snacks/${s.id}`))}>
-                  remove
-                </button>
-              )}
+              <button className="chip shrink-0" onClick={() => setEditing(s)} aria-label={`Edit ${s.name}`}>
+                ✎
+              </button>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] font-bold uppercase text-muted">Your rating</span>
@@ -331,6 +331,7 @@ export function Snacks({ detail }: { detail: NightDetail }) {
         </div>
       </div>
       <ErrorNote error={error} />
+      <EditSnackSheet key={editing?.id ?? "none"} item={editing} open={editing != null} onClose={() => setEditing(null)} />
     </section>
   );
 }

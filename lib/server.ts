@@ -615,9 +615,40 @@ export async function addSnack(sql: Sql, nightId: string, memberId: string, name
   return rows[0];
 }
 
+/**
+ * Correct a snack or drink: who actually brought it, what it was called, or
+ * whether it's food or a glass. Open to anyone in the group — the person who
+ * typed it in is often not the person who brought it, which is the whole
+ * reason this exists. Ratings belong to the item, so they survive a
+ * reassignment and the provider stats follow the correction.
+ */
+export async function updateSnack(
+  sql: Sql,
+  snackId: string,
+  memberId: string,
+  changes: { broughtBy?: string; name?: string; kind?: "snack" | "drink"; note?: string | null },
+): Promise<SnackItem> {
+  await requireMember(sql, memberId);
+  const existing = (await sql`SELECT * FROM snack_items WHERE id = ${snackId}`) as SnackItem[];
+  if (!existing.length) throw new NotFound("No such snack");
+  const current = existing[0];
+  const broughtBy = changes.broughtBy ? (await requireMember(sql, changes.broughtBy)).id : current.member_id;
+  const name = changes.name ?? current.name;
+  const kind = changes.kind ?? current.kind;
+  const note = changes.note === undefined ? current.note : changes.note;
+  const rows = (await sql`UPDATE snack_items SET member_id = ${broughtBy}, name = ${name}, kind = ${kind}, note = ${note}
+                          WHERE id = ${snackId} RETURNING *`) as SnackItem[];
+  return rows[0];
+}
+
+/**
+ * Anyone can remove one. Owner-only would be theatre now that anyone can
+ * reassign an item to themselves first.
+ */
 export async function deleteSnack(sql: Sql, snackId: string, memberId: string) {
-  const rows = await sql`DELETE FROM snack_items WHERE id = ${snackId} AND member_id = ${memberId} RETURNING id`;
-  if (!rows.length) throw new NotFound("Only whoever added it can remove it");
+  await requireMember(sql, memberId);
+  const rows = await sql`DELETE FROM snack_items WHERE id = ${snackId} RETURNING id`;
+  if (!rows.length) throw new NotFound("No such snack");
 }
 
 /** One rating per person per item; re-rating replaces, which is what a mis-tap needs. */

@@ -3,13 +3,13 @@
 import { useState } from "react";
 import { send, useSearch, useWishlist } from "@/lib/api";
 import { fmtRuntime } from "@/lib/format";
-import type { Movie, NightDetail, TmdbSearchResult } from "@/lib/types";
+import type { Movie, NightDetail, SnackItem, SnackKind, TmdbSearchResult } from "@/lib/types";
 import { useRouter } from "next/navigation";
 import { fmtDate } from "@/lib/format";
 import { rotationOrder } from "@/lib/rotation";
 import { MAX_CANDIDATES } from "@/lib/constants";
 import { useApp } from "./Shell";
-import { Avatar, ErrorNote, Poster, ScorePicker, Sheet, Spinner } from "./ui";
+import { Avatar, ErrorNote, Poster, ScorePicker, Sheet, Spinner, useSheetFocus } from "./ui";
 
 /** Search TMDB and submit one pick, or a shortlist for a vote. Wishlist shows when the search is empty. */
 export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose: () => void; onPicked?: (n: NightDetail) => void }) {
@@ -18,6 +18,7 @@ export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const { data, isLoading, error: searchError } = useSearch(q);
+  const searchRef = useSheetFocus<HTMLInputElement>(open);
   const { data: wishlist } = useWishlist();
   const { members } = useApp();
 
@@ -49,7 +50,7 @@ export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose:
   return (
     <Sheet open={open} onClose={onClose} title="Pick a movie">
       <p className="mb-2 text-xs text-muted">Tap a result to propose it, or use + to build a shortlist (up to six) and let everyone vote.</p>
-      <input className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
+      <input ref={searchRef} className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} inputMode="search" />
       {shortlist.length > 0 && (
         <div className="card mb-3 flex flex-col gap-2 p-3">
           <div className="label">Shortlist · {shortlist.length}/{MAX_CANDIDATES}</div>
@@ -169,6 +170,7 @@ export function BackfillSheet({ open, onClose, defaultSelector = null }: { open:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const { data, isLoading } = useSearch(q);
+  const searchRef = useSheetFocus<HTMLInputElement>(open && !movie);
   const active = members.filter((m) => m.active);
 
   async function submit() {
@@ -199,7 +201,7 @@ export function BackfillSheet({ open, onClose, defaultSelector = null }: { open:
     <Sheet open={open} onClose={onClose} title="Add a past movie">
       {!movie ? (
         <>
-          <input className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
+          <input ref={searchRef} className="input mb-3" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} inputMode="search" />
           {isLoading && !data && <Spinner />}
           <div className="flex flex-col gap-2">
             {data?.map((m) => (
@@ -364,6 +366,7 @@ export function WishlistAddSheet({ open, onClose }: { open: boolean; onClose: ()
   const [busy, setBusy] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
   const { data, isLoading } = useSearch(q);
+  const searchRef = useSheetFocus<HTMLInputElement>(open);
   async function add(m: TmdbSearchResult) {
     setBusy(m.tmdb_id);
     setError(null);
@@ -380,7 +383,7 @@ export function WishlistAddSheet({ open, onClose }: { open: boolean; onClose: ()
   }
   return (
     <Sheet open={open} onClose={onClose} title="Add to wishlist">
-      <input className="input mb-2" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} autoFocus inputMode="search" />
+      <input ref={searchRef} className="input mb-2" placeholder="Search movies…" value={q} onChange={(e) => setQ(e.target.value)} inputMode="search" />
       <input className="input mb-3" placeholder="Why? (optional)" value={note} maxLength={140} onChange={(e) => setNote(e.target.value)} />
       <ErrorNote error={error} />
       {isLoading && !data && <Spinner />}
@@ -513,6 +516,93 @@ export function ImpressionSheet({ night, open, onClose }: { night: NightDetail; 
       <button className="btn btn-gold mt-4 w-full" disabled={score == null || busy} onClick={submit}>
         {score == null ? "Pick a score" : `Lock in ${score}`}
       </button>
+    </Sheet>
+  );
+}
+
+/** Fix a snack or drink: who brought it, what it was called, or its note. */
+export function EditSnackSheet({ item, open, onClose }: { item: SnackItem | null; open: boolean; onClose: () => void }) {
+  const { members } = useApp();
+  const [broughtBy, setBroughtBy] = useState(item?.member_id ?? "");
+  const [name, setName] = useState(item?.name ?? "");
+  const [kind, setKind] = useState<SnackKind>(item?.kind ?? "snack");
+  const [note, setNote] = useState(item?.note ?? "");
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  if (!item) return null;
+  const active = members.filter((m) => m.active || m.id === item.member_id);
+
+  async function run(fn: () => Promise<unknown>) {
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      onClose();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Sheet open={open} onClose={onClose} title={`Edit ${item.name}`}>
+      <div className="flex flex-col gap-4">
+        <div>
+          <div className="label mb-1">Who brought it?</div>
+          <div className="grid grid-cols-2 gap-2">
+            {active.map((m) => (
+              <button key={m.id} className={`btn ${broughtBy === m.id ? "btn-gold" : "btn-ghost"} min-h-11 justify-start gap-2 text-sm`} onClick={() => setBroughtBy(m.id)}>
+                <Avatar member={m} size={22} /> {m.name}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="label mb-1">Snack or drink?</div>
+          <div className="flex gap-2">
+            <button className={`chip ${kind === "snack" ? "chip-on" : ""}`} onClick={() => setKind("snack")}>
+              🍿 Snack
+            </button>
+            <button className={`chip ${kind === "drink" ? "chip-on" : ""}`} onClick={() => setKind("drink")}>
+              🍸 Drink
+            </button>
+          </div>
+        </div>
+        <div>
+          <div className="label mb-1">What was it?</div>
+          <input className="input" value={name} maxLength={60} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div>
+          <div className="label mb-1">Note</div>
+          <input className="input" placeholder="Optional" value={note} maxLength={140} onChange={(e) => setNote(e.target.value)} />
+        </div>
+        <ErrorNote error={error} />
+        <button
+          className="btn btn-gold w-full"
+          disabled={busy || !name.trim()}
+          onClick={() => run(() => send("PATCH", `/api/snacks/${item.id}`, { member_id: broughtBy, name, kind, note: note || null }))}
+        >
+          Save changes
+        </button>
+        <div className="border-t border-line pt-3">
+          {confirming ? (
+            <div className="grid grid-cols-2 gap-2">
+              <button className="btn btn-ghost" disabled={busy} onClick={() => setConfirming(false)}>
+                Keep it
+              </button>
+              <button className="btn btn-bad" disabled={busy} onClick={() => run(() => send("DELETE", `/api/snacks/${item.id}`))}>
+                Yes, remove
+              </button>
+            </div>
+          ) : (
+            <button className="w-full text-center text-xs font-bold text-muted underline" onClick={() => setConfirming(true)}>
+              Remove this item
+            </button>
+          )}
+        </div>
+      </div>
     </Sheet>
   );
 }

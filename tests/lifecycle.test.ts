@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { db } from "../lib/db";
 import * as s from "../lib/server";
-import { firstImpressionStats } from "../lib/stats";
+import { firstImpressionStats, snackStats } from "../lib/stats";
 import { makeTestDb, MOVIE } from "./helpers/pglite";
 
 let close: () => Promise<void>;
@@ -450,4 +450,41 @@ test("first impressions are taken during the movie, locked, and hidden until the
   assert.ok(stats.per_member.find((p) => p.member_id === current)!.mean_abs_change! > 0);
   const awards = (await s.loadNightDetail(sql, night.night.id, current)).awards;
   assert.ok(awards.some((a) => a.key === "crystal_ball"));
+});
+
+test("a snack can be reattributed, renamed, or removed by anyone", async () => {
+  const sql = await db();
+  const members = await s.loadMembers(sql);
+  const calvin = members.find((m) => m.name === "Calvin")!;
+  const molly = members.find((m) => m.name === "Molly")!;
+  const sam = members.find((m) => m.name === "Sam")!;
+  const night = await s.backfillNight(sql, calvin.id, MOVIE({ tmdb_id: 808, title: "Snack Night" }), calvin.id, new Date("2024-06-01T20:00:00Z"), []);
+
+  // Sam types it in, but Molly actually brought it.
+  const item = await s.addSnack(sql, night.night.id, sam.id, "Margarita", "snack", null);
+  await s.rateSnack(sql, item.id, calvin.id, 5);
+  await s.rateSnack(sql, item.id, molly.id, 4);
+
+  // Anyone can fix it — here Calvin, who neither typed it nor brought it.
+  const fixed = await s.updateSnack(sql, item.id, calvin.id, { broughtBy: molly.id, kind: "drink", note: "extra salt" });
+  assert.equal(fixed.member_id, molly.id);
+  assert.equal(fixed.kind, "drink");
+  assert.equal(fixed.note, "extra salt");
+  assert.equal(fixed.name, "Margarita", "an unspecified field is left alone");
+
+  // Ratings belong to the item, so they survive and the credit follows.
+  const detail = await s.loadNightDetail(sql, night.night.id, calvin.id);
+  assert.equal(detail.snack_ratings.length, 2);
+  const stats = snackStats(await s.loadDataset(sql));
+  assert.equal(stats.best_drink?.name, "Margarita");
+  assert.equal(stats.best_drink_provider?.member_id, molly.id, "the drink champion is now Molly, not Sam");
+
+  await assert.rejects(s.updateSnack(sql, item.id, calvin.id, { broughtBy: "00000000-0000-4000-8000-000000000000" }), /Unknown member/);
+  await assert.rejects(s.updateSnack(sql, "00000000-0000-4000-8000-000000000000", calvin.id, { name: "x" }), /No such snack/);
+
+  // Removal is open to anyone too, and takes its ratings with it.
+  await s.deleteSnack(sql, item.id, sam.id);
+  assert.equal((await s.loadNightDetail(sql, night.night.id, calvin.id)).snacks.length, 0);
+  assert.equal((await sql`SELECT count(*)::int AS n FROM snack_ratings WHERE snack_item_id = ${item.id}`)[0].n, 0);
+  await assert.rejects(s.deleteSnack(sql, item.id, sam.id), /No such snack/);
 });

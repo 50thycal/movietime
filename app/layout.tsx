@@ -14,6 +14,10 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   viewportFit: "cover",
+  // Resize the layout viewport for the keyboard where it's supported, which
+  // fixes this class of jumping outright. Safari ignores it, hence the
+  // visualViewport handling in lib/useViewport.ts.
+  interactiveWidget: "resizes-content",
   themeColor: "#0b0a0f",
 };
 

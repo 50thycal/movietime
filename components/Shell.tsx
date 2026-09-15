@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect } from "react";
 import { useHomeState } from "@/lib/api";
 import { useMe } from "@/lib/me";
+import { useViewportInsets } from "@/lib/useViewport";
 import type { HomeState, Member } from "@/lib/types";
 import { Avatar, Spinner } from "./ui";
 
@@ -37,6 +38,7 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const { data: state, error } = useHomeState();
   const pathname = usePathname();
   const router = useRouter();
+  const { keyboard } = useViewportInsets();
 
   const members = state?.members ?? [];
   const memberById = (id: string | null | undefined) => members.find((m) => m.id === id) ?? null;
@@ -77,7 +79,9 @@ export default function Shell({ children }: { children: React.ReactNode }) {
     body = children;
   }
 
-  const showNav = state?.setup_complete && me;
+  // With the keyboard up the nav would sit behind it, and on iOS it drags the
+  // page around as the visual viewport moves. Stand it down until typing ends.
+  const showNav = state?.setup_complete && me && keyboard === 0;
 
   return (
     <AppCtx.Provider value={ctx}>

@@ -29,7 +29,8 @@ import type {
   Todo,
   FirstImpression,
 } from "./types";
-import { ACTIVE_STATUSES } from "./types";
+import { ACTIVE_STATUSES, NIGHT_SOURCES, type NightSource } from "./types";
+import { DEFAULT_SERVICE_KEYS, WATCH_REGION, cleanServiceKeys, type StreamingSettings } from "./streaming";
 import { mean, round1 } from "./scoring";
 
 // ---------------------------------------------------------------- members & settings
@@ -46,6 +47,18 @@ export async function getSetting<T>(sql: Sql, key: string): Promise<T | null> {
 export async function setSetting(sql: Sql, key: string, value: unknown) {
   await sql`INSERT INTO settings (key, value, updated_at) VALUES (${key}, ${JSON.stringify(value)}::jsonb, now())
             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`;
+}
+
+/** The group's streaming services. Unset means the defaults, not "none". */
+export async function getStreaming(sql: Sql): Promise<StreamingSettings> {
+  const v = await getSetting<{ services?: unknown }>(sql, "streaming");
+  return { region: WATCH_REGION, services: v ? cleanServiceKeys(v.services) : DEFAULT_SERVICE_KEYS };
+}
+
+export async function setStreaming(sql: Sql, services: unknown): Promise<StreamingSettings> {
+  if (!Array.isArray(services)) throw new BadRequest("services must be a list");
+  await setSetting(sql, "streaming", { services: cleanServiceKeys(services) });
+  return getStreaming(sql);
 }
 
 export async function currentSelectorId(sql: Sql): Promise<string | null> {
@@ -172,13 +185,14 @@ export async function loadHomeState(sql: Sql, me: string | null): Promise<HomeSt
   const setupComplete = members.length > 0;
   if (setupComplete) await ensureBudgets(sql, members);
   const currentId = await currentSelectorId(sql);
-  const [active, last, countRows, balances, budget, cycle] = await Promise.all([
+  const [active, last, countRows, balances, budget, cycle, streaming] = await Promise.all([
     activeNight(sql),
     sql`SELECT * FROM movie_nights WHERE status = 'complete' ORDER BY completed_at DESC LIMIT 1`,
     sql`SELECT count(*)::int AS n FROM movie_nights WHERE status = 'complete'`,
     loadBalances(sql),
     getBudget(sql),
     getCycle(sql, members),
+    getStreaming(sql),
   ]);
   const current = active ? await loadNightDetail(sql, active.id, me) : null;
   return {
@@ -193,6 +207,7 @@ export async function loadHomeState(sql: Sql, me: string | null): Promise<HomeSt
     current,
     last_complete: last.length ? await loadNightDetail(sql, (last[0] as MovieNight).id, me) : null,
     watched_count: Number(countRows[0]?.n ?? 0),
+    streaming,
   };
 }
 
@@ -205,7 +220,13 @@ export { MAX_CANDIDATES };
  * Propose one film (group approves/rejects) or a shortlist of up to
  * MAX_CANDIDATES (everyone votes, winner becomes the movie).
  */
-export async function proposeMovies(sql: Sql, memberId: string, movies: TmdbSearchResult[]): Promise<NightDetail> {
+export async function proposeMovies(
+  sql: Sql,
+  memberId: string,
+  movies: TmdbSearchResult[],
+  source: NightSource | null = null,
+): Promise<NightDetail> {
+  if (source != null && !NIGHT_SOURCES.includes(source)) throw new BadRequest("Unknown source");
   const member = await requireMember(sql, memberId);
   const current = await currentSelectorId(sql);
   if (current && current !== member.id) throw new Conflict("It isn't your turn to pick");
@@ -216,7 +237,7 @@ export async function proposeMovies(sql: Sql, memberId: string, movies: TmdbSear
   const rows_: Movie[] = [];
   for (const m of unique) rows_.push(await upsertMovie(sql, m));
   // The partial unique index is the real guard against two simultaneous proposals.
-  const rows = (await sql`INSERT INTO movie_nights (movie_id, selector_id, status) VALUES (${rows_[0].id}, ${member.id}, 'proposed') RETURNING *`) as MovieNight[];
+  const rows = (await sql`INSERT INTO movie_nights (movie_id, selector_id, status, source) VALUES (${rows_[0].id}, ${member.id}, 'proposed', ${source}) RETURNING *`) as MovieNight[];
   for (let i = 0; i < rows_.length; i++) {
     await sql`INSERT INTO night_candidates (night_id, movie_id, position) VALUES (${rows[0].id}, ${rows_[i].id}, ${i})`;
   }

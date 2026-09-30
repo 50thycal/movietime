@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useWishlist } from "@/lib/api";
+import { MovieExtrasPanel } from "@/components/MovieExtras";
 import { ApprovalRow, MovieHeader, STATUS_LABEL } from "@/components/NightCard";
 import { useApp } from "@/components/Shell";
 import { ChangePickerSheet, ImpressionSheet, PickSheet, PredictSheet, RateSheet, RejectSheet } from "@/components/sheets";
@@ -102,6 +103,9 @@ function TonightInner() {
           )}
           <PrimaryAction detail={current} meId={me.id} busy={busy} setOpen={setOpen} act={act} />
           <ErrorNote error={error} />
+          {(current.night.status === "approved" || (current.night.status === "proposed" && current.candidates.length <= 1)) && (
+            <MovieExtrasPanel tmdbId={current.movie.tmdb_id} />
+          )}
         </section>
       ) : (
         <section className="card flex flex-col gap-3 p-5">

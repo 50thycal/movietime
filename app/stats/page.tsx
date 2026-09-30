@@ -332,6 +332,7 @@ function Extras({ data, m }: { data: Any; m: Lookup }) {
   return (
     <div className="flex flex-col gap-2">
       <FirstImpressionBlock fi={fi} m={m} />
+      <SourceBlock sources={data.sources} />
       <div className="card p-3">
         <div className="label mb-2">Snacks &amp; drinks</div>
         {s.total_items === 0 && <div className="text-sm text-muted">Nothing logged yet.</div>}
@@ -361,6 +362,33 @@ function Extras({ data, m }: { data: Any; m: Lookup }) {
         {p.most_exceeded && <Line k="Exceeded expectations" v={`${p.most_exceeded.title}: ${fmtScore(p.most_exceeded.predicted)} → ${fmtScore(p.most_exceeded.actual)}`} />}
         {p.most_disappointed && <Line k="Disappointed" v={`${p.most_disappointed.title}: ${fmtScore(p.most_disappointed.predicted)} → ${fmtScore(p.most_disappointed.actual)}`} />}
       </div>
+    </div>
+  );
+}
+
+const SOURCE_LABEL: Record<string, string> = { taste: "🎯 Pick like us", roulette: "🎲 Roulette", search: "🔎 Searched & older" };
+
+/** Is the taste engine earning its keep? Group average by where the pick came from. */
+function SourceBlock({ sources }: { sources: Any[] | undefined }) {
+  if (!sources) return null;
+  const taste = sources.find((s) => s.source === "taste");
+  const rest = sources.filter((s) => s.source !== "taste" && s.average != null);
+  const others = rest.length ? rest.reduce((a, s) => a + s.average * s.count, 0) / rest.reduce((a, s) => a + s.count, 0) : null;
+  const verdict =
+    !taste || taste.count < 3 || others == null
+      ? "Watch a few Pick-like-us films and this will say whether it beats picking by hand."
+      : taste.average - others >= 0.3
+        ? `Pick like us is winning: +${fmtScore(taste.average - others)} over everything else.`
+        : others - taste.average >= 0.3
+          ? `Pick like us is trailing by ${fmtScore(others - taste.average)}. You know yourselves better.`
+          : "Dead heat — the taste engine picks about as well as you do.";
+  return (
+    <div className="card p-3">
+      <div className="label mb-2">Where the picks came from</div>
+      {sources.map((s) => (
+        <Bar key={s.source} label={SOURCE_LABEL[s.source] ?? s.source} value={s.average} count={s.count} />
+      ))}
+      <div className="mt-1 text-xs text-muted">{verdict}</div>
     </div>
   );
 }

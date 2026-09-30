@@ -5,6 +5,7 @@ import { useApp } from "@/components/Shell";
 import { Avatar, ErrorNote } from "@/components/ui";
 import { send, useVersionInfo } from "@/lib/api";
 import { rotationOrder } from "@/lib/rotation";
+import { SERVICES } from "@/lib/streaming";
 import type { Member } from "@/lib/types";
 
 const COLORS = ["#ff5c8a", "#ffb02e", "#3ddc97", "#5aa9ff", "#c084fc", "#f97316", "#22d3ee", "#a3e635"];
@@ -63,6 +64,8 @@ export default function SettingsPage() {
         </div>
         {state.current && <div className="text-xs text-muted">Locked while a movie is in play.</div>}
       </section>
+
+      <StreamingSection />
 
       <CoinsSection />
 
@@ -206,6 +209,40 @@ function EditMember({ member, onClose, run, busy }: { member: Member; onClose: (
           Save
         </button>
       </div>
+    </section>
+  );
+}
+
+function StreamingSection() {
+  const { state } = useApp();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  if (!state) return null;
+  const ours = state.streaming.services;
+  async function toggle(key: string) {
+    setBusy(true);
+    setError(null);
+    try {
+      await send("POST", "/api/streaming", { services: ours.includes(key) ? ours.filter((k) => k !== key) : [...ours, key] });
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section className="card flex flex-col gap-3 p-4">
+      <div className="label">Our streaming services ({state.streaming.region})</div>
+      <p className="text-xs text-muted">Roulette can stick to these, and every movie shows whether it&apos;s on one of them.</p>
+      <div className="flex flex-wrap gap-1.5">
+        {SERVICES.map((s) => (
+          <button key={s.key} disabled={busy} className={`chip ${ours.includes(s.key) ? "chip-on" : ""}`} onClick={() => toggle(s.key)}>
+            {ours.includes(s.key) ? "✓ " : ""}
+            {s.label}
+          </button>
+        ))}
+      </div>
+      <ErrorNote error={error} />
     </section>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState } from "react";
+import { MovieExtrasPanel, Synopsis } from "@/components/MovieExtras";
 import { ApprovalRow, MovieHeader, STATUS_LABEL } from "@/components/NightCard";
 import { Awards, FirstImpressions, LateRating, Predictions, Results, Reviews, Snacks } from "@/components/NightSections";
 import { useApp } from "@/components/Shell";
@@ -31,7 +32,8 @@ export default function MoviePage({ params }: { params: Promise<{ id: string }> 
             </button>
           )}
         </div>
-        {data.movie.overview && <p className="text-sm text-muted">{data.movie.overview}</p>}
+        <Synopsis text={data.movie.overview} lines={6} className="text-sm" />
+        <MovieExtrasPanel tmdbId={data.movie.tmdb_id} />
         {(n.status === "proposed" || n.status === "rejected") && <ApprovalRow detail={data} members={members} />}
         {n.status === "rejected" && data.approvals.some((a) => a.reason) && (
           <div className="text-xs text-bad">{data.approvals.filter((a) => a.reason).map((a) => `“${a.reason}”`).join(" ")}</div>

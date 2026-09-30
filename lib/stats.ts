@@ -707,6 +707,25 @@ export function tasteProfile(data: Dataset): TasteProfile {
   };
 }
 
+// ---------------------------------------------------------------- pick sources
+
+export interface SourceStat {
+  source: "taste" | "roulette" | "search";
+  count: number;
+  average: number | null;
+}
+
+/** Does "Pick like us" actually beat plain roulette and hand-picked films? */
+export function sourceStats(data: Dataset): SourceStat[] {
+  const out: SourceStat[] = [];
+  for (const source of ["taste", "roulette", "search"] as const) {
+    const nights = data.nights.filter((n) => (n.night.source ?? "search") === source);
+    const avgs = nights.map(groupAverage).filter((x): x is number => x != null);
+    out.push({ source, count: nights.length, average: round1(mean(avgs)) });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------- leaderboards
 
 export interface Leaderboards {

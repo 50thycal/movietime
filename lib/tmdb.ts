@@ -1,4 +1,5 @@
-import type { Genre, TmdbSearchResult } from "./types";
+import { SERVICES, WATCH_REGION, serviceKeyFor } from "./streaming";
+import type { CastMember, Genre, MovieExtras, MovieWithExtras, TmdbSearchResult, WatchProvider } from "./types";
 
 /**
  * Thin TMDB v3 client. Server-only: the key never reaches the browser.
@@ -60,7 +61,36 @@ interface TmdbMovieRaw {
   vote_average?: number;
   vote_count?: number;
   popularity?: number;
-  credits?: { crew?: { job: string; name: string }[] };
+  credits?: { crew?: { job: string; name: string }[]; cast?: { name: string; character?: string; profile_path?: string | null; order?: number }[] };
+  tagline?: string;
+  imdb_id?: string | null;
+  videos?: { results?: TmdbVideoRaw[] };
+  release_dates?: { results?: { iso_3166_1: string; release_dates: { certification: string; type: number }[] }[] };
+  "watch/providers"?: { results?: Record<string, TmdbRegionProvidersRaw> };
+}
+
+interface TmdbVideoRaw {
+  key: string;
+  site: string;
+  type: string;
+  official?: boolean;
+  published_at?: string;
+}
+
+interface TmdbProviderRaw {
+  provider_id: number;
+  provider_name: string;
+  logo_path?: string | null;
+  display_priority?: number;
+}
+
+interface TmdbRegionProvidersRaw {
+  link?: string;
+  flatrate?: TmdbProviderRaw[];
+  free?: TmdbProviderRaw[];
+  ads?: TmdbProviderRaw[];
+  rent?: TmdbProviderRaw[];
+  buy?: TmdbProviderRaw[];
 }
 
 function yearOf(date?: string | null): number | null {
@@ -102,10 +132,104 @@ export async function movieGenres(): Promise<Genre[]> {
   return data.genres;
 }
 
+// Everything the pick card shows, in one request. Every details lookup uses
+// this same URL, so a film viewed on the roulette card is already in Next's
+// fetch cache by the time someone accepts it.
+const DETAIL_APPENDS = "credits,videos,release_dates,watch/providers";
+
 /** Full details for one film, including its director. */
 export async function movieDetails(tmdbId: number): Promise<TmdbSearchResult> {
-  const raw = await tmdb<TmdbMovieRaw>(`/movie/${tmdbId}`, { append_to_response: "credits" });
-  return normalizeMovie(raw);
+  return (await movieWithExtras(tmdbId)).movie;
+}
+
+/** Details plus trailer, cast, certification and where to watch it. */
+export async function movieWithExtras(tmdbId: number, region = WATCH_REGION): Promise<MovieWithExtras> {
+  const raw = await tmdb<TmdbMovieRaw>(`/movie/${tmdbId}`, { append_to_response: DETAIL_APPENDS });
+  return { movie: normalizeMovie(raw), extras: extractExtras(raw, region) };
+}
+
+const TRAILER_RANK = ["Trailer", "Teaser", "Clip"];
+
+/** Official trailer first, then any trailer, then a teaser; newest wins a tie. */
+export function bestTrailer(videos: TmdbVideoRaw[]): string | null {
+  const yt = videos.filter((v) => v.site === "YouTube" && TRAILER_RANK.includes(v.type));
+  const rank = (v: TmdbVideoRaw) => TRAILER_RANK.indexOf(v.type) * 2 + (v.official ? 0 : 1);
+  yt.sort((a, b) => rank(a) - rank(b) || (b.published_at ?? "").localeCompare(a.published_at ?? ""));
+  return yt[0]?.key ?? null;
+}
+
+function providers(xs: TmdbProviderRaw[] | undefined): WatchProvider[] {
+  return (xs ?? [])
+    .slice()
+    .sort((a, b) => (a.display_priority ?? 99) - (b.display_priority ?? 99))
+    .map((p) => ({ provider_id: p.provider_id, provider_name: p.provider_name, logo_path: p.logo_path ?? null, service: serviceKeyFor(p.provider_name) }));
+}
+
+/** One entry per provider id, in first-seen order. */
+function uniqueProviders(xs: WatchProvider[]): WatchProvider[] {
+  return xs.filter((p, i) => xs.findIndex((q) => q.provider_id === p.provider_id) === i);
+}
+
+export function extractExtras(raw: TmdbMovieRaw, region = WATCH_REGION): MovieExtras {
+  const releases = raw.release_dates?.results?.find((r) => r.iso_3166_1 === region)?.release_dates ?? [];
+  // Theatrical (3) is the canonical rating; fall back to any dated release that has one.
+  const cert =
+    releases.find((r) => r.type === 3 && r.certification)?.certification ??
+    releases.find((r) => r.certification)?.certification ??
+    null;
+  const cast: CastMember[] = (raw.credits?.cast ?? [])
+    .slice()
+    .sort((a, b) => (a.order ?? 99) - (b.order ?? 99))
+    .slice(0, 8)
+    .map((c) => ({ name: c.name, character: c.character || null, profile_path: c.profile_path ?? null }));
+  const wp = raw["watch/providers"]?.results?.[region];
+  return {
+    tagline: raw.tagline?.trim() || null,
+    certification: cert,
+    cast,
+    trailer_key: bestTrailer(raw.videos?.results ?? []),
+    imdb_id: raw.imdb_id || null,
+    providers: {
+      link: wp?.link ?? null,
+      stream: uniqueProviders([...providers(wp?.flatrate), ...providers(wp?.free), ...providers(wp?.ads)]),
+      rent: providers(wp?.rent),
+      buy: providers(wp?.buy),
+    },
+  };
+}
+
+let providerListCache: { at: number; region: string; list: TmdbProviderRaw[] } | null = null;
+
+/**
+ * TMDB provider ids for our catalog services, matched by name against the
+ * live list so plan variants ("… with Ads", "… Premium Plus") are included.
+ * Amazon/Apple "Channel" resellers are left out: they'd match on name but
+ * aren't the subscription the group has.
+ */
+export async function resolveProviderIds(keys: string[], region = WATCH_REGION): Promise<number[]> {
+  const wanted = SERVICES.filter((s) => keys.includes(s.key));
+  if (!wanted.length) return [];
+  try {
+    if (!providerListCache || providerListCache.region !== region || Date.now() - providerListCache.at > 24 * 3_600_000) {
+      const data = await tmdb<{ results: TmdbProviderRaw[] }>("/watch/providers/movie", { watch_region: region });
+      providerListCache = { at: Date.now(), region, list: data.results };
+    }
+    const ids = providerListCache.list
+      .filter((p) => !/channel/i.test(p.provider_name) && wanted.some((s) => s.match.test(p.provider_name)))
+      .map((p) => p.provider_id);
+    if (ids.length) return [...new Set(ids)];
+  } catch {
+    // Fall through to the built-in ids.
+  }
+  return [...new Set(wanted.flatMap((s) => s.ids))];
+}
+
+/** TMDB's "people who liked this also liked" list — raw, without runtime. */
+export async function recommendations(tmdbId: number): Promise<TmdbSearchResult[]> {
+  const genres = await movieGenres();
+  const lookup = new Map(genres.map((g) => [g.id, g.name]));
+  const data = await tmdb<{ results: TmdbMovieRaw[] }>(`/movie/${tmdbId}/recommendations`, { page: 1 });
+  return data.results.map((r) => normalizeMovie(r, lookup));
 }
 
 /**
@@ -117,7 +241,12 @@ export async function searchMovies(query: string, limit = 8): Promise<TmdbSearch
   const data = await tmdb<{ results: TmdbMovieRaw[] }>("/search/movie", { query, include_adult: "false", page: 1 });
   const top = data.results.slice(0, limit);
   const detailed = await Promise.all(
-    top.map((r) => movieDetails(r.id).catch(() => normalizeMovie(r))),
+    // Credits only: search wants runtime + director fast, not the whole pick card.
+    top.map((r) =>
+      tmdb<TmdbMovieRaw>(`/movie/${r.id}`, { append_to_response: "credits" })
+        .then((raw) => normalizeMovie(raw))
+        .catch(() => normalizeMovie(r)),
+    ),
   );
   return detailed;
 }
@@ -130,6 +259,9 @@ export interface DiscoverFilters {
   yearTo?: number;
   minRating?: number;
   minVotes?: number;
+  /** Only films streaming (subscription/free/ads) on one of these provider ids. */
+  providerIds?: number[];
+  sortBy?: string;
 }
 
 /**
@@ -141,7 +273,7 @@ export async function discoverMovies(filters: DiscoverFilters, page: number): Pr
   const genres = await movieGenres();
   const lookup = new Map(genres.map((g) => [g.id, g.name]));
   const data = await tmdb<{ results: TmdbMovieRaw[]; total_pages: number }>("/discover/movie", {
-    sort_by: "popularity.desc",
+    sort_by: filters.sortBy ?? "popularity.desc",
     include_adult: "false",
     include_video: "false",
     "vote_count.gte": filters.minVotes ?? 500,
@@ -151,6 +283,9 @@ export async function discoverMovies(filters: DiscoverFilters, page: number): Pr
     "with_runtime.gte": filters.minRuntime ?? 60,
     "primary_release_date.gte": filters.yearFrom ? `${filters.yearFrom}-01-01` : undefined,
     "primary_release_date.lte": filters.yearTo ? `${filters.yearTo}-12-31` : undefined,
+    watch_region: filters.providerIds?.length ? WATCH_REGION : undefined,
+    with_watch_providers: filters.providerIds?.length ? filters.providerIds.join("|") : undefined,
+    with_watch_monetization_types: filters.providerIds?.length ? "flatrate|free|ads" : undefined,
     page,
   });
   return {

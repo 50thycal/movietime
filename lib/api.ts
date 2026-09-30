@@ -2,7 +2,7 @@
 
 import useSWR, { mutate } from "swr";
 import { getMemberId } from "./me";
-import type { HomeState, HistoryEntry, Member, NightDetail, TmdbSearchResult, Genre, WishlistEntry } from "./types";
+import type { HomeState, HistoryEntry, Member, MovieWithExtras, NightDetail, TmdbSearchResult, Genre, WishlistEntry } from "./types";
 
 function headers(): Record<string, string> {
   const me = getMemberId();
@@ -51,9 +51,19 @@ export function useSearch(q: string) {
   });
 }
 
+/** Trailer, cast and providers for one film. Seeded with what the caller already has (e.g. a spin result). */
+export function useMovieExtras(tmdbId: number | null | undefined, fallbackData?: MovieWithExtras) {
+  return useSWR<MovieWithExtras>(tmdbId ? `/api/movies/${tmdbId}` : null, fetcher, {
+    fallbackData,
+    revalidateOnFocus: false,
+    revalidateIfStale: !fallbackData,
+    dedupingInterval: 10 * 60_000,
+  });
+}
+
 /** After any write, pull every shared view back in sync. */
 export function refreshAll() {
-  return mutate((key) => typeof key === "string" && key.startsWith("/api/") && !key.startsWith("/api/movies/search"), undefined, {
+  return mutate((key) => typeof key === "string" && key.startsWith("/api/") && !key.startsWith("/api/movies/"), undefined, {
     revalidate: true,
   });
 }

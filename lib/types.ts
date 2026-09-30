@@ -1,5 +1,7 @@
 /** Shared shapes for rows and API payloads. Timestamps arrive as ISO strings after JSON. */
 
+import type { StreamingSettings } from "./streaming";
+
 export const NIGHT_STATUSES = [
   "proposed",
   "rejected",
@@ -59,6 +61,8 @@ export interface MovieNight {
   watched_at: string | null;
   completed_at: string | null;
   rotation_advanced: boolean;
+  /** "roulette" / "taste" when proposed from the roulette screen; null otherwise. */
+  source?: string | null;
 }
 
 export interface Approval {
@@ -206,6 +210,7 @@ export interface HomeState {
   current: NightDetail | null;
   last_complete: NightDetail | null;
   watched_count: number;
+  streaming: StreamingSettings;
 }
 
 /** A completed (or any) night flattened for the history grid. */
@@ -239,4 +244,57 @@ export interface WishlistEntry {
   added_by: string;
   note: string | null;
   created_at: string;
+}
+
+export interface WatchProvider {
+  provider_id: number;
+  provider_name: string;
+  logo_path: string | null;
+  /** Our catalog key (lib/streaming.ts) when this is a service we know about. */
+  service: string | null;
+}
+
+export interface CastMember {
+  name: string;
+  character: string | null;
+  profile_path: string | null;
+}
+
+/** Everything beyond the basics that helps decide on a film. Fetched live, never stored. */
+export interface MovieExtras {
+  tagline: string | null;
+  /** US certification: "PG-13", "R"… */
+  certification: string | null;
+  cast: CastMember[];
+  /** YouTube video key of the best trailer. */
+  trailer_key: string | null;
+  imdb_id: string | null;
+  providers: {
+    /** TMDB's watch page for the film (JustWatch data). */
+    link: string | null;
+    /** Subscription, free and ad-supported. */
+    stream: WatchProvider[];
+    rent: WatchProvider[];
+    buy: WatchProvider[];
+  };
+}
+
+export interface MovieWithExtras {
+  movie: TmdbSearchResult;
+  extras: MovieExtras;
+}
+
+/** Where a proposal came from, so stats can compare the roulette modes. */
+export const NIGHT_SOURCES = ["roulette", "taste"] as const;
+export type NightSource = (typeof NIGHT_SOURCES)[number];
+
+/** What /api/roulette returns. */
+export interface SpinResult {
+  genre: Genre | null;
+  movie: TmdbSearchResult | null;
+  extras: MovieExtras | null;
+  /** Pick-like-us only: why this film. */
+  reasons?: string[];
+  /** Pick-like-us only: whose taste (null = the group). */
+  for_member?: string | null;
 }

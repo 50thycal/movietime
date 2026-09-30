@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { fmtDate } from "@/lib/format";
 import { rotationOrder } from "@/lib/rotation";
 import { MAX_CANDIDATES } from "@/lib/constants";
+import { Synopsis } from "./MovieExtras";
 import { useApp } from "./Shell";
 import { Avatar, ErrorNote, Poster, ScorePicker, Sheet, Spinner, useSheetFocus } from "./ui";
 
@@ -112,7 +113,9 @@ export function PickSheet({ open, onClose, onPicked }: { open: boolean; onClose:
                 <div className="mt-1 text-xs font-bold text-gold">⏱ {fmtRuntime(m.runtime_min)}</div>
                 <div className="text-xs text-muted">{m.genres.map((g) => g.name).join(" · ")}</div>
                 {m.director && <div className="text-xs text-muted">Dir. {m.director}</div>}
-                <div className="mt-1 line-clamp-2 text-xs text-muted">{m.overview}</div>
+                <div className="mt-1">
+                  <Synopsis text={m.overview} lines={2} />
+                </div>
               </div>
             </button>
             <button className={`chip self-center text-lg ${inList(m) ? "chip-on" : ""}`} onClick={() => toggle(m)} aria-label={inList(m) ? "Remove from shortlist" : "Add to shortlist"}>

@@ -193,4 +193,8 @@ export const SCHEMA_STATEMENTS: string[] = [
      created_at timestamptz NOT NULL DEFAULT now(),
      UNIQUE (night_id, member_id)
    )`,
+
+  // Where a proposal came from ("roulette", "taste"), so stats can check
+  // whether Pick-like-us picks actually score higher. Null = searched by hand.
+  `ALTER TABLE movie_nights ADD COLUMN IF NOT EXISTS source text CHECK (source IS NULL OR source IN ('roulette','taste'))`,
 ];

@@ -12,6 +12,7 @@ import {
   predictionStats,
   runtimeStats,
   snackStats,
+  sourceStats,
   tasteProfile,
 } from "@/lib/stats";
 
@@ -33,6 +34,7 @@ export async function GET() {
       snacks: snackStats(data),
       predictions: predictionStats(data),
       first_impressions: firstImpressionStats(data),
+      sources: sourceStats(data),
       awards: awardTotals(data),
       taste: tasteProfile(data),
     });

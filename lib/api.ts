@@ -61,11 +61,13 @@ export function useMovieExtras(tmdbId: number | null | undefined, fallbackData?:
   });
 }
 
-/** After any write, pull every shared view back in sync. */
+/**
+ * After any write, pull every shared view back in sync. Only the key filter is
+ * passed: given a data argument (even `undefined`) SWR writes it into the
+ * cache, blanking every matching view until the refetch lands.
+ */
 export function refreshAll() {
-  return mutate((key) => typeof key === "string" && key.startsWith("/api/") && !key.startsWith("/api/movies/"), undefined, {
-    revalidate: true,
-  });
+  return mutate((key) => typeof key === "string" && key.startsWith("/api/") && !key.startsWith("/api/movies/"));
 }
 
 type Method = "POST" | "PATCH" | "DELETE";
